@@ -104,6 +104,17 @@ def scrape_jobs(
 
         try:
             resp = requests.get(SERP_API_URL, params=params, timeout=30)
+            # If 400 error, log the response body and try fallback
+            if resp.status_code == 400:
+                print(f"  [DEBUG] SerpAPI 400 response: {resp.text[:500]}")
+                # Fallback: move location into query string
+                params_retry = params.copy()
+                loc = params_retry.pop("location", "")
+                params_retry["q"] = f"{query} {loc}".strip()
+                print(f"  [DEBUG] Retrying with q='{params_retry['q']}' (no location param)")
+                resp = requests.get(SERP_API_URL, params=params_retry, timeout=30)
+                if resp.status_code != 200:
+                    print(f"  [DEBUG] Retry also failed ({resp.status_code}): {resp.text[:500]}")
             resp.raise_for_status()
             data = resp.json()
             api_calls += 1
