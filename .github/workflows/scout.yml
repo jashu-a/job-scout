@@ -1,0 +1,113 @@
+name: Job Scout
+
+on:
+  # Manual trigger — click "Run workflow" in GitHub Actions tab
+  workflow_dispatch:
+    inputs:
+      days_back:
+        description: 'Jobs posted within last N days'
+        required: false
+        default: '7'
+        type: choice
+        options: ['1', '3', '7', '14', '30']
+      threshold:
+        description: 'Minimum match score (0-100)'
+        required: false
+        default: '65'
+      dry_run:
+        description: 'Dry run (no Telegram/Drive)'
+        required: false
+        default: false
+        type: boolean
+
+  # Scheduled trigger — runs daily at 8am UTC (adjust to your timezone)
+  schedule:
+    - cron: '0 8 * * *'
+
+jobs:
+  scout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Decode resume
+        run: echo "${{ secrets.RESUME_BASE64 }}" | base64 -d > resume.docx
+
+      - name: Create Google Drive credentials
+        run: echo '${{ secrets.GDRIVE_CREDENTIALS_JSON }}' > service_account.json
+
+      - name: Generate config.yaml
+        run: |
+          cat > config.yaml << 'CONFIGEOF'
+          serpapi_key: "${{ secrets.SERPAPI_KEY }}"
+          openai_api_key: "${{ secrets.OPENAI_API_KEY }}"
+          telegram_bot_token: "${{ secrets.TELEGRAM_BOT_TOKEN }}"
+          telegram_chat_id: "${{ secrets.TELEGRAM_CHAT_ID }}"
+
+          resume_path: "resume.docx"
+
+          # ── Edit your search combos directly in this workflow file ──
+          search_combos:
+            - title: "Software Engineer"
+              location: "Tokyo"
+              seniority: "Mid level"
+
+            - title: "Backend Developer"
+              location: "Tokyo"
+              seniority: "Mid level"
+
+            - title: "Platform Engineer"
+              location: "Tokyo"
+              seniority: "Mid level"
+
+          days_back: 7
+          match_threshold: 65
+          max_results_per_combo: 30
+          openai_model: "gpt-4o-mini"
+
+          gdrive_enabled: true
+          gdrive_credentials_path: "service_account.json"
+          gdrive_folder_id: "${{ secrets.GDRIVE_FOLDER_ID }}"
+          CONFIGEOF
+
+      - name: Override config from inputs (manual trigger)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if [ -n "${{ inputs.days_back }}" ]; then
+            sed -i 's/^days_back:.*/days_back: ${{ inputs.days_back }}/' config.yaml
+          fi
+          if [ -n "${{ inputs.threshold }}" ]; then
+            sed -i 's/^match_threshold:.*/match_threshold: ${{ inputs.threshold }}/' config.yaml
+          fi
+
+      - name: Restore jobs database (dedup cache)
+        uses: actions/cache@v4
+        with:
+          path: jobs.db
+          # Single persistent cache key — always restores and updates the same DB
+          key: jobs-db-persistent
+          restore-keys: |
+            jobs-db-persistent
+
+      - name: Run Job Scout
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            python main.py --dry-run
+          else
+            python main.py
+          fi
+
+      # Save the database back to cache for next run
+      # The cache action above handles this automatically on post-job
