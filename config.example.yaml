@@ -1,0 +1,38 @@
+# ============================================================
+# JOB SCOUT - Configuration Template
+# ============================================================
+# Copy this to config.yaml and fill in your values.
+# config.yaml is gitignored — your secrets stay local.
+# For GitHub Actions, secrets are injected via workflow.
+
+# --- API Keys ---
+serpapi_key: "YOUR_SERPAPI_KEY"
+openai_api_key: "YOUR_OPENAI_API_KEY"
+telegram_bot_token: "YOUR_BOT_TOKEN"
+telegram_chat_id: "YOUR_CHAT_ID"
+
+# --- Resume ---
+resume_path: "resume.docx"
+
+# --- Search Combos ---
+search_combos:
+  - title: "Software Engineer"
+    location: "New York, NY"
+    seniority: "Mid level"
+
+  - title: "Backend Developer"
+    location: "San Francisco, CA"
+    seniority: "Senior level"
+
+# --- Filtering ---
+days_back: 7
+match_threshold: 65
+max_results_per_combo: 30
+
+# --- OpenAI ---
+openai_model: "gpt-4o-mini"
+
+# --- Google Drive (optional) ---
+gdrive_enabled: false
+gdrive_credentials_path: "service_account.json"
+gdrive_folder_id: "YOUR_FOLDER_ID"
