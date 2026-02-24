@@ -61,15 +61,15 @@ jobs:
           # ── Edit your search combos directly in this workflow file ──
           search_combos:
             - title: "Software Engineer"
-              location: "New York, NY"
+              location: "Tokyo"
               seniority: "Mid level"
 
             - title: "Backend Developer"
-              location: "San Francisco, CA"
-              seniority: "Senior level"
+              location: "Tokyo"
+              seniority: "Mid level"
 
-            - title: "Data Engineer"
-              location: "Remote"
+            - title: "Platform Engineer"
+              location: "Tokyo"
               seniority: "Mid level"
 
           days_back: 7
