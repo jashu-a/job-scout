@@ -1,9 +1,6 @@
 """
 Job scraper using SerpAPI's Google Jobs engine.
-Fetches jobs based on title, location, seniority, and date filters.
-
-Supports pagination with smart stopping — stops fetching once it hits
-a page where all jobs are already in the database, saving API calls.
+Uses next_page_token for pagination.
 """
 
 import requests
@@ -12,7 +9,6 @@ from typing import Optional, Callable
 
 SERP_API_URL = "https://serpapi.com/search.json"
 
-# SerpAPI date filter chips mapping
 DAYS_BACK_MAP = {
     1: "date_posted:today",
     3: "date_posted:3days",
@@ -55,28 +51,13 @@ def scrape_jobs(
     is_seen_fn: Optional[Callable[[str, str, str], bool]] = None,
 ) -> list[dict]:
     """
-    Fetch jobs from SerpAPI Google Jobs with pagination and smart stopping.
-
-    Args:
-        api_key:      SerpAPI key
-        title:        Job title to search
-        location:     Job location
-        seniority:    Optional seniority level filter
-        days_back:    Only jobs posted in the last N days
-        max_results:  Maximum total jobs to return
-        is_seen_fn:   Optional callback(title, company, location) -> bool
-                      If provided, pagination stops early when an entire page
-                      consists of already-seen jobs, saving API calls.
-
-    Returns:
-        List of job dicts with keys: title, company, location, description, link, posted_at, extensions
+    Fetch jobs from SerpAPI Google Jobs with next_page_token pagination.
     """
-    # Build the query string
     query = title
     if seniority:
         query = f"{seniority} {query}"
 
-    # Map days_back to the closest SerpAPI chip
+    # Map days_back to SerpAPI chip
     chip = DAYS_BACK_MAP.get(days_back, "date_posted:week")
     if days_back not in DAYS_BACK_MAP:
         for threshold in sorted(DAYS_BACK_MAP.keys()):
@@ -87,10 +68,9 @@ def scrape_jobs(
             chip = "date_posted:month"
 
     all_jobs = []
-    start = 0
-    page_size = 10  # Google Jobs returns max 10 per page
-    max_pages = (max_results + page_size - 1) // page_size  # Ceiling division
     api_calls = 0
+    next_page_token = None
+    max_pages = (max_results + 9) // 10  # ~10 results per page
 
     for page_num in range(max_pages):
         params = {
@@ -99,23 +79,17 @@ def scrape_jobs(
             "location": location,
             "chips": chip,
             "api_key": api_key,
-            "start": start,
         }
+
+        # Add pagination token for page 2+
+        if next_page_token:
+            params["next_page_token"] = next_page_token
 
         try:
             resp = requests.get(SERP_API_URL, params=params, timeout=30)
-            # If 400 error, log the response body and try fallback
-            if resp.status_code == 400:
-                print(f"  [DEBUG] SerpAPI 400 response: {resp.text[:500]}")
-                # Fallback: move location into query string
-                params_retry = params.copy()
-                loc = params_retry.pop("location", "")
-                params_retry["q"] = f"{query} {loc}".strip()
-                print(f"  [DEBUG] Retrying with q='{params_retry['q']}' (no location param)")
-                resp = requests.get(SERP_API_URL, params=params_retry, timeout=30)
-                if resp.status_code != 200:
-                    print(f"  [DEBUG] Retry also failed ({resp.status_code}): {resp.text[:500]}")
-            resp.raise_for_status()
+            if resp.status_code != 200:
+                print(f"  [ERROR] SerpAPI returned {resp.status_code}: {resp.text[:300]}")
+                break
             data = resp.json()
             api_calls += 1
         except requests.RequestException as e:
@@ -124,15 +98,13 @@ def scrape_jobs(
 
         raw_jobs = data.get("jobs_results", [])
 
-        # No more results available
         if not raw_jobs:
-            print(f"  [INFO] No more results at page {page_num + 1}. Total API calls: {api_calls}")
+            print(f"  [INFO] No more results at page {page_num + 1}. API calls: {api_calls}")
             break
 
-        # Parse jobs from this page
         page_jobs = [_build_job_dict(item, query, location) for item in raw_jobs]
 
-        # Smart stop: check if ALL jobs on this page are already seen
+        # Smart stop: if all jobs on this page are already seen, stop
         if is_seen_fn and page_jobs:
             new_on_page = sum(
                 1 for j in page_jobs
@@ -140,19 +112,21 @@ def scrape_jobs(
             )
             if new_on_page == 0:
                 print(f"  [INFO] Page {page_num + 1}: all {len(page_jobs)} jobs already seen. "
-                      f"Stopping pagination. API calls used: {api_calls}")
+                      f"Stopping. API calls: {api_calls}")
                 break
             else:
                 print(f"  [INFO] Page {page_num + 1}: {new_on_page}/{len(page_jobs)} new jobs")
 
         all_jobs.extend(page_jobs)
 
-        # Check if we've collected enough
         if len(all_jobs) >= max_results:
             break
 
-        # Move to next page
-        start += page_size
+        # Get next page token from serpapi_pagination
+        pagination = data.get("serpapi_pagination", {})
+        next_page_token = pagination.get("next_page_token")
+        if not next_page_token:
+            print(f"  [INFO] No more pages available. API calls: {api_calls}")
+            break
 
-    # Trim to max_results
     return all_jobs[:max_results]
