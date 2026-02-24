@@ -1,6 +1,6 @@
 """
 Job scraper using SerpAPI's Google Jobs engine.
-Uses next_page_token for pagination.
+Uses next_page_token for pagination (start parameter is deprecated).
 """
 
 import requests
@@ -79,7 +79,25 @@ def scrape_jobs(
             "location": location,
             "chips": chip,
             "api_key": api_key,
+            "hl": "en",  # Results in English
         }
+
+        # Auto-detect country code from location string
+        location_lower = location.lower()
+        country_map = {
+            "japan": "jp", "jp": "jp",
+            "united states": "us", "usa": "us", "us": "us",
+            "united kingdom": "gb", "uk": "gb",
+            "canada": "ca", "germany": "de", "france": "fr",
+            "australia": "au", "india": "in", "singapore": "sg",
+            "netherlands": "nl", "ireland": "ie", "spain": "es",
+            "italy": "it", "brazil": "br", "mexico": "mx",
+            "south korea": "kr", "korea": "kr",
+        }
+        for key, code in country_map.items():
+            if key in location_lower:
+                params["gl"] = code
+                break
 
         # Add pagination token for page 2+
         if next_page_token:
@@ -99,6 +117,10 @@ def scrape_jobs(
         raw_jobs = data.get("jobs_results", [])
 
         if not raw_jobs:
+            # Log what we got back to help debug
+            print(f"  [DEBUG] Response keys: {list(data.keys())}")
+            if "error" in data:
+                print(f"  [DEBUG] API error: {data['error']}")
             print(f"  [INFO] No more results at page {page_num + 1}. API calls: {api_calls}")
             break
 
