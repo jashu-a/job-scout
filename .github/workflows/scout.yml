@@ -72,6 +72,10 @@ jobs:
               location: "Tokyo, Japan"
               seniority: "Mid level"
 
+            - title: "Software Engineer"
+              location: "Japan"
+              seniority: ""
+
           days_back: 7
           match_threshold: 65
           max_results_per_combo: 30
