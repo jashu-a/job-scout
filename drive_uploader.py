@@ -1,169 +1,106 @@
 """
-Google Drive uploader.
-Creates folders and uploads tailored resumes + cover letters to Google Drive.
-
-Setup:
-1. Go to https://console.cloud.google.com
-2. Create a project (or use existing)
-3. Enable "Google Drive API"
-4. Create a Service Account → download the JSON key file
-5. Share your target Google Drive folder with the service account email
-   (the email looks like: name@project.iam.gserviceaccount.com)
-6. Set the path to the JSON key file in config.yaml as `gdrive_credentials_path`
-
-Alternative: OAuth2 flow (for personal Drive, not shared drives)
-- Create OAuth2 credentials instead of service account
-- Set `gdrive_auth_type: oauth` in config.yaml
+Google Drive uploader using OAuth2 (personal account).
+Service accounts no longer have storage quota for regular Drive.
+This uses a refresh token generated once locally.
 """
 
-import re
+import os
 from pathlib import Path
 
-from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
 
-SCOPES = ['https://www.googleapis.com/auth/drive.file']
+def _get_credentials() -> Credentials:
+    """Build OAuth2 credentials from environment variables."""
+    client_id = os.environ.get("GDRIVE_CLIENT_ID", "")
+    client_secret = os.environ.get("GDRIVE_CLIENT_SECRET", "")
+    refresh_token = os.environ.get("GDRIVE_REFRESH_TOKEN", "")
 
+    if not all([client_id, client_secret, refresh_token]):
+        raise ValueError(
+            "Missing Google Drive OAuth credentials. "
+            "Set GDRIVE_CLIENT_ID, GDRIVE_CLIENT_SECRET, and GDRIVE_REFRESH_TOKEN."
+        )
 
-def _get_drive_service(credentials_path: str):
-    """Authenticate and return a Google Drive API service."""
-    creds = service_account.Credentials.from_service_account_file(
-        credentials_path, scopes=SCOPES
+    creds = Credentials(
+        token=None,
+        refresh_token=refresh_token,
+        client_id=client_id,
+        client_secret=client_secret,
+        token_uri="https://oauth2.googleapis.com/token",
+        scopes=["https://www.googleapis.com/auth/drive.file"],
     )
-    return build('drive', 'v3', credentials=creds)
+
+    return creds
 
 
-def _sanitize_folder_name(text: str) -> str:
-    """Make a string safe for use as a folder name."""
-    return re.sub(r'[^\w\s-]', '', text).strip().replace(' ', '_')[:80]
-
-
-def _find_or_create_folder(service, folder_name: str, parent_id: str) -> str:
-    """
-    Find an existing folder by name under parent, or create it.
-    Returns the folder ID.
-    """
-    # Search for existing folder
-    query = (
-        f"name = '{folder_name}' "
-        f"and mimeType = 'application/vnd.google-apps.folder' "
-        f"and '{parent_id}' in parents "
-        f"and trashed = false"
-    )
-    results = service.files().list(
-        q=query, spaces='drive', fields='files(id, name)', pageSize=1
-    ).execute()
-
-    files = results.get('files', [])
-    if files:
-        return files[0]['id']
-
-    # Create new folder
-    folder_metadata = {
-        'name': folder_name,
-        'mimeType': 'application/vnd.google-apps.folder',
-        'parents': [parent_id],
-    }
-    folder = service.files().create(
-        body=folder_metadata, fields='id'
-    ).execute()
-
-    return folder['id']
+def _sanitize_name(name: str) -> str:
+    return "".join(c if c.isalnum() or c in " -_" else "_" for c in name).strip()[:80]
 
 
 def upload_to_drive(
-    credentials_path: str,
     parent_folder_id: str,
     company: str,
     job_id: str,
     resume_path: str,
-    cover_letter_path: str,
+    cover_letter_path: str = "",
+    credentials_path: str = "",  # Kept for backward compat, ignored
 ) -> dict:
     """
-    Upload tailored resume and cover letter to Google Drive.
-
-    Creates a subfolder named <company>_<job_id> inside the parent folder,
-    then uploads both documents into it.
-
-    Args:
-        credentials_path:   Path to Google service account JSON key
-        parent_folder_id:   Google Drive folder ID to create subfolders in
-        company:            Company name (used in folder name)
-        job_id:             Job identifier (used in folder name)
-        resume_path:        Path to the tailored resume .docx
-        cover_letter_path:  Path to the cover letter .docx
-
-    Returns:
-        {
-            "folder_id": str,
-            "folder_name": str,
-            "resume_file_id": str,
-            "cover_letter_file_id": str,
-            "folder_link": str,
-            "error": str | None
-        }
+    Upload tailored resume + cover letter to Google Drive.
+    Creates a subfolder under parent_folder_id named "<Company>_<JobID>".
     """
     try:
-        service = _get_drive_service(credentials_path)
+        creds = _get_credentials()
+        service = build("drive", "v3", credentials=creds, cache_discovery=False)
 
-        # Create subfolder: <company>_<job_id>
-        safe_company = _sanitize_folder_name(company)
-        safe_job_id = _sanitize_folder_name(job_id)
-        folder_name = f"{safe_company}_{safe_job_id}"
+        # Create subfolder
+        safe_company = _sanitize_name(company)
+        folder_name = f"{safe_company}_{job_id}"
 
-        folder_id = _find_or_create_folder(service, folder_name, parent_folder_id)
+        folder_meta = {
+            "name": folder_name,
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": [parent_folder_id],
+        }
+        folder = service.files().create(body=folder_meta, fields="id").execute()
+        folder_id = folder["id"]
+
+        uploaded_files = []
 
         # Upload resume
-        resume_file_id = _upload_file(
-            service, resume_path, f"Tailored_Resume_{safe_company}.docx", folder_id
-        )
+        if resume_path and Path(resume_path).exists():
+            file_name = f"Tailored_Resume_{safe_company}.docx"
+            file_meta = {"name": file_name, "parents": [folder_id]}
+            media = MediaFileUpload(
+                resume_path,
+                mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+            f = service.files().create(body=file_meta, media_body=media, fields="id").execute()
+            uploaded_files.append(f["id"])
+            print(f"       ✅ Uploaded: {file_name}")
 
         # Upload cover letter
-        cl_file_id = _upload_file(
-            service, cover_letter_path, f"Cover_Letter_{safe_company}.docx", folder_id
-        )
+        if cover_letter_path and Path(cover_letter_path).exists():
+            file_name = f"Cover_Letter_{safe_company}.docx"
+            file_meta = {"name": file_name, "parents": [folder_id]}
+            media = MediaFileUpload(
+                cover_letter_path,
+                mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+            f = service.files().create(body=file_meta, media_body=media, fields="id").execute()
+            uploaded_files.append(f["id"])
+            print(f"       ✅ Uploaded: {file_name}")
 
         folder_link = f"https://drive.google.com/drive/folders/{folder_id}"
-
         return {
             "folder_id": folder_id,
-            "folder_name": folder_name,
-            "resume_file_id": resume_file_id,
-            "cover_letter_file_id": cl_file_id,
             "folder_link": folder_link,
-            "error": None,
+            "file_ids": uploaded_files,
         }
 
     except Exception as e:
-        return {
-            "folder_id": None,
-            "folder_name": None,
-            "resume_file_id": None,
-            "cover_letter_file_id": None,
-            "folder_link": None,
-            "error": str(e),
-        }
-
-
-def _upload_file(service, local_path: str, drive_filename: str, parent_folder_id: str) -> str:
-    """Upload a single file to Google Drive. Returns the file ID."""
-    file_metadata = {
-        'name': drive_filename,
-        'parents': [parent_folder_id],
-    }
-
-    media = MediaFileUpload(
-        local_path,
-        mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        resumable=True,
-    )
-
-    file = service.files().create(
-        body=file_metadata,
-        media_body=media,
-        fields='id',
-    ).execute()
-
-    return file['id']
+        print(f"       ⚠️  Drive upload failed: {e}")
+        return {"error": str(e)}
