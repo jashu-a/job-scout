@@ -110,6 +110,7 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
     threshold = cfg.get("match_threshold", 65)
     max_results = cfg.get("max_results_per_combo", 30)
     combos = cfg.get("search_combos", [])
+    sources = cfg.get("sources", ["google_jobs", "linkedin", "tokyodev", "indeed"])
 
     # Google Drive config
     gdrive_enabled = cfg.get("gdrive_enabled", False) and not skip_drive and not skip_docs
@@ -163,6 +164,7 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
                 days_back=days_back,
                 max_results=max_results,
                 is_seen_fn=_is_seen_check,
+                sources=sources,
             )
 
             total_scraped += len(jobs)
