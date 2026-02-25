@@ -74,7 +74,6 @@ jobs:
               'max_results_per_combo': 30,
               'openai_model': 'gpt-4o-mini',
               'gdrive_enabled': True,
-              'gdrive_credentials_path': 'service_account.json',
               'gdrive_folder_id': os.environ['GDRIVE_FOLDER_ID'],
           }
           with open('config.yaml', 'w') as f:

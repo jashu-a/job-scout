@@ -63,11 +63,19 @@ def validate_config(cfg: dict, skip_drive: bool = False):
 
     # Google Drive validation (optional)
     if not skip_drive and cfg.get("gdrive_enabled", False):
+        import os
+        # Check for OAuth env vars (new method) or credentials file (legacy)
+        has_oauth = all([
+            os.environ.get("GDRIVE_CLIENT_ID"),
+            os.environ.get("GDRIVE_CLIENT_SECRET"),
+            os.environ.get("GDRIVE_REFRESH_TOKEN"),
+        ])
         gdrive_creds = cfg.get("gdrive_credentials_path", "")
-        if not gdrive_creds or str(gdrive_creds).startswith("YOUR_"):
-            errors.append("  - Google Drive credentials path not set")
-        elif not Path(gdrive_creds).exists():
-            errors.append(f"  - Google Drive credentials file not found: {gdrive_creds}")
+        has_service_account = gdrive_creds and Path(gdrive_creds).exists()
+
+        if not has_oauth and not has_service_account:
+            errors.append("  - Google Drive credentials not found. Set GDRIVE_CLIENT_ID, "
+                          "GDRIVE_CLIENT_SECRET, and GDRIVE_REFRESH_TOKEN env vars.")
 
         gdrive_folder = cfg.get("gdrive_folder_id", "")
         if not gdrive_folder or str(gdrive_folder).startswith("YOUR_"):
@@ -275,7 +283,6 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
                 if gdrive_enabled and resume_docx_path and cover_letter_docx_path and not dry_run:
                     print(f"       ☁️  Uploading to Google Drive...")
                     drive_result = upload_to_drive(
-                        credentials_path=gdrive_creds,
                         parent_folder_id=gdrive_folder_id,
                         company=job["company"],
                         job_id=job_id,
