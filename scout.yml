@@ -20,9 +20,9 @@ on:
         default: false
         type: boolean
 
-  # Scheduled trigger — runs daily at 8am UTC (adjust to your timezone)
+  # Scheduled trigger — runs daily at 9am JST (midnight UTC)
   schedule:
-    - cron: '0 8 * * *'
+    - cron: '0 0 * * *'
 
 jobs:
   scout:
@@ -43,71 +43,95 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Decode resume
-        run: echo "${{ secrets.RESUME_BASE64 }}" | base64 -d > resume.docx
-
-      - name: Create Google Drive credentials
-        run: echo '${{ secrets.GDRIVE_CREDENTIALS_JSON }}' > service_account.json
+        run: echo "$RESUME_BASE64" | base64 -d > resume.docx
+        env:
+          RESUME_BASE64: ${{ secrets.RESUME_BASE64 }}
 
       - name: Generate config.yaml
+        env:
+          SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
         run: |
-          cat > config.yaml << 'CONFIGEOF'
-          serpapi_key: "${{ secrets.SERPAPI_KEY }}"
-          openai_api_key: "${{ secrets.OPENAI_API_KEY }}"
-          telegram_bot_token: "${{ secrets.TELEGRAM_BOT_TOKEN }}"
-          telegram_chat_id: "${{ secrets.TELEGRAM_CHAT_ID }}"
-
-          resume_path: "resume.docx"
-
-          # ── Edit your search combos directly in this workflow file ──
-          search_combos:
-            - title: "Software Engineer"
-              location: "Tokyo"
-              seniority: "Mid level"
-
-            - title: "Backend Developer"
-              location: "Tokyo"
-              seniority: "Mid level"
-
-            - title: "Platform Engineer"
-              location: "Tokyo"
-              seniority: "Mid level"
-
-          days_back: 7
-          match_threshold: 65
-          max_results_per_combo: 30
-          openai_model: "gpt-4o-mini"
-
-          gdrive_enabled: true
-          gdrive_credentials_path: "service_account.json"
-          gdrive_folder_id: "${{ secrets.GDRIVE_FOLDER_ID }}"
-          CONFIGEOF
+          python3 -c "
+          import yaml, os
+          config = {
+              'serpapi_key': os.environ['SERPAPI_KEY'],
+              'openai_api_key': os.environ['OPENAI_API_KEY'],
+              'telegram_bot_token': os.environ['TELEGRAM_BOT_TOKEN'],
+              'telegram_chat_id': os.environ['TELEGRAM_CHAT_ID'],
+              'resume_path': 'resume.docx',
+              'search_combos': [
+                  {'title': 'Software Engineer', 'location': 'Tokyo, Japan', 'seniority': 'Mid level'},
+                  {'title': 'Backend Developer', 'location': 'Tokyo, Japan', 'seniority': 'Mid level'},
+                  {'title': 'Platform Engineer', 'location': 'Tokyo, Japan', 'seniority': 'Mid level'},
+              ],
+              'sources': ['linkedin', 'tokyodev', 'indeed', 'google_jobs'],
+              'days_back': 7,
+              'match_threshold': 65,
+              'max_results_per_combo': 30,
+              'openai_model': 'gpt-4o-mini',
+              'gdrive_enabled': True,
+              'gdrive_credentials_path': 'service_account.json',
+              'gdrive_folder_id': os.environ['GDRIVE_FOLDER_ID'],
+          }
+          with open('config.yaml', 'w') as f:
+              yaml.dump(config, f, default_flow_style=False)
+          print('✅ config.yaml generated')
+          print(open('config.yaml').read())
+          "
 
       - name: Override config from inputs (manual trigger)
         if: github.event_name == 'workflow_dispatch'
         run: |
-          if [ -n "${{ inputs.days_back }}" ]; then
-            sed -i 's/^days_back:.*/days_back: ${{ inputs.days_back }}/' config.yaml
-          fi
-          if [ -n "${{ inputs.threshold }}" ]; then
-            sed -i 's/^match_threshold:.*/match_threshold: ${{ inputs.threshold }}/' config.yaml
-          fi
+          python3 -c "
+          import yaml
+          with open('config.yaml') as f:
+              config = yaml.safe_load(f)
+          days_back = '${{ inputs.days_back }}'
+          threshold = '${{ inputs.threshold }}'
+          if days_back:
+              config['days_back'] = int(days_back)
+          if threshold:
+              config['match_threshold'] = int(threshold)
+          with open('config.yaml', 'w') as f:
+              yaml.dump(config, f, default_flow_style=False)
+          print('⚙️ Config after overrides:')
+          print(open('config.yaml').read())
+          "
+
+      - name: Verify setup
+        run: |
+          echo "📂 Files in workspace:"
+          ls -la
+          echo ""
+          echo "📄 Resume file size:"
+          wc -c resume.docx
+          echo ""
+          echo "🔑 Service account exists:"
+          test -f service_account.json && echo "Yes" || echo "No"
+          echo ""
+          echo "📋 Config:"
+          cat config.yaml
 
       - name: Restore jobs database (dedup cache)
         uses: actions/cache@v4
         with:
           path: jobs.db
-          # Single persistent cache key — always restores and updates the same DB
           key: jobs-db-persistent
           restore-keys: |
             jobs-db-persistent
 
       - name: Run Job Scout
+        env:
+          GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+          GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+          GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
         run: |
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             python main.py --dry-run
           else
             python main.py
           fi
-
-      # Save the database back to cache for next run
-      # The cache action above handles this automatically on post-job
