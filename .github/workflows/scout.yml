@@ -27,7 +27,7 @@ on:
 jobs:
   scout:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repo
@@ -71,7 +71,8 @@ jobs:
               'sources': ['linkedin', 'tokyodev', 'indeed', 'google_jobs'],
               'days_back': 7,
               'match_threshold': 65,
-              'max_results_per_combo': 30,
+              'max_results_per_combo': 50,
+              'max_telegram_sends': 50,
               'openai_model': 'gpt-4o-mini',
               'gdrive_enabled': True,
               'gdrive_folder_id': os.environ['GDRIVE_FOLDER_ID'],
