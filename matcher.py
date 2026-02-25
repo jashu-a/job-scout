@@ -64,23 +64,26 @@ Return ONLY a valid JSON object (no markdown fences, no extra text):
 
 TAILORED_RESUME_PROMPT = """\
 You are an expert resume writer. You will receive a candidate's original resume TEXT and a
-specific job posting. Your task is to produce TARGETED TEXT REPLACEMENTS that tailor the
-resume for this role while keeping the original document's structure and formatting intact.
+specific job posting. Your task is to produce TARGETED TEXT REPLACEMENTS that make this resume
+clearly tailored for this specific role.
 
-## Rules
+## Critical Rules
 
-1. **Never fabricate** experience, skills, or qualifications. Only rephrase, reorder, and
-   emphasize what already exists in the original resume.
-2. **Mirror the JD's language** — if the JD says "microservices architecture", use that exact
-   phrase instead of "distributed systems" (if the candidate has that experience).
-3. **Keep replacements precise** — each "original" string must be an EXACT substring from the
-   resume text provided. Do not paraphrase the original; copy it character-for-character.
-4. **Quantify more** — if the original says "improved performance", keep it unless you can
-   rephrase to highlight relevance. Don't invent metrics.
-5. **Replacement length** — tailored text should be roughly similar length to the original
-   (±30%) so it fits the same layout space.
-6. Only replace bullet points and descriptions that benefit from tailoring. Leave things like
-   company names, dates, job titles, education details, and contact info unchanged.
+1. **Every replacement must be VISIBLY DIFFERENT** — a reader comparing the original and tailored
+   version side by side should immediately notice the changes. Don't just swap single words.
+2. **Never fabricate** — only rephrase, reorder, and emphasize what exists. But DO rephrase
+   aggressively to match the JD's terminology and priorities.
+3. **Mirror the JD's exact language** — if the JD says "CI/CD pipelines", replace "deployment
+   automation" with "CI/CD pipelines". Match their vocabulary precisely.
+4. **Rewrite bullet points to lead with relevance** — if a bullet mentions 3 things and only
+   one is relevant to this job, restructure to lead with the relevant part.
+5. **The "original" string must be EXACT** — copy it character-for-character from the resume text.
+6. **Make 5-10 meaningful replacements minimum** — focus on:
+   - Professional summary / objective (rewrite entirely for this role)
+   - Top 3-5 most relevant experience bullets (rewrite to emphasize JD alignment)
+   - Skills section (reorder to put most relevant skills first)
+7. **Summary is most important** — always provide a completely rewritten summary that mentions
+   the target company name, role title, and 2-3 key JD requirements the candidate meets.
 
 ## Output Format
 
@@ -88,27 +91,27 @@ Return ONLY a valid JSON object:
 {
   "replacement_pairs": [
     {
-      "original": "<EXACT text from the resume to find>",
-      "tailored": "<rewritten version optimized for the target job>",
-      "section": "<which section this is from: experience|summary|skills|other>"
+      "original": "<EXACT text from the resume to find — must match character for character>",
+      "tailored": "<meaningfully rewritten version targeting this specific job>",
+      "section": "<experience|summary|skills|other>"
     }
   ],
   "summary_replacement": {
     "original": "<exact current summary/objective text, if one exists>",
-    "tailored": "<new 2-3 sentence summary targeted at this specific role>"
+    "tailored": "<completely rewritten 2-3 sentence summary mentioning the company name and role>"
   },
   "skills_replacement": {
     "original": "<exact current skills line/section text>",
-    "tailored": "<reordered skills with most relevant to this job listed first>"
+    "tailored": "<reordered skills with JD-relevant skills first, using JD's exact terminology>"
   },
   "candidate_name": "<full name from resume>",
-  "contact_info": "<email, phone, location, LinkedIn if found in resume>",
-  "tailoring_notes": "<brief explanation of what you changed and why>"
+  "contact_info": "<email, phone, location, LinkedIn if found>",
+  "tailoring_notes": "<what you changed and why — be specific>"
 }
 
-IMPORTANT: The "original" field in each replacement pair must be an EXACT copy-paste match
-from the resume text. If you cannot find the exact text, skip that replacement. Partial or
-approximate matches will cause the replacement to fail silently.
+IMPORTANT: Generate at least 5 replacement_pairs. Each tailored text should be noticeably
+different from the original — not just a single word change. If the job description is short,
+use the job title and company to infer what skills and experiences to emphasize.
 """
 
 # ── PROMPT 3: Cover Letter ───────────────────────────────────────────────────
@@ -155,7 +158,7 @@ def _call_openai(api_key: str, system_prompt: str, user_message: str, model: str
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
             ],
-            temperature=0.3,
+            temperature=0.5,
             max_tokens=3000,
         )
 
@@ -228,15 +231,29 @@ def generate_tailored_resume(
 ) -> dict:
     """Generate a tailored resume adapted to a specific job."""
 
+    # If description is too short, construct a richer prompt from what we have
+    if len(job_description.strip()) < 100:
+        desc_section = (
+            f"**Description:** (Limited info available — tailor based on the role title and company)\n"
+            f"This is a {job_title} position at {job_company}. "
+            f"Focus your tailoring on skills and experiences most relevant to a typical "
+            f"{job_title} role. Emphasize the company name '{job_company}' in the summary."
+        )
+    else:
+        desc_section = f"**Description:**\n{job_description[:4000]}"
+
     user_message = f"""## ORIGINAL RESUME:
 {resume_text[:6000]}
 
 ## TARGET JOB:
 **Title:** {job_title}
 **Company:** {job_company}
-**Description:**
-{job_description[:4000]}
+{desc_section}
 
+CRITICAL: This resume MUST be uniquely tailored for {job_title} at {job_company}.
+- The summary MUST mention "{job_company}" by name and "{job_title}" as the target role.
+- Replacement pairs must reference specific requirements from THIS job description.
+- Do NOT produce generic replacements that could apply to any job.
 Tailor the resume for this specific role. Do NOT fabricate anything — only rephrase and reorder."""
 
     return _call_openai(api_key, TAILORED_RESUME_PROMPT, user_message, model)
@@ -252,15 +269,33 @@ def generate_cover_letter(
 ) -> dict:
     """Generate a tailored cover letter for a specific job."""
 
+    # Handle missing or empty company name
+    if not job_company or not job_company.strip():
+        company_display = "your company"
+    else:
+        company_display = job_company
+
+    # If description is too short, enrich the prompt
+    if len(job_description.strip()) < 100:
+        desc_section = (
+            f"**Description:** (Limited info available)\n"
+            f"This is a {job_title} position at {company_display}. "
+            f"Write the cover letter based on how the candidate's experience "
+            f"relates to a typical {job_title} role."
+        )
+    else:
+        desc_section = f"**Description:**\n{job_description[:4000]}"
+
     user_message = f"""## CANDIDATE RESUME:
 {resume_text[:6000]}
 
 ## TARGET JOB:
 **Title:** {job_title}
-**Company:** {job_company}
-**Description:**
-{job_description[:4000]}
+**Company:** {company_display}
+{desc_section}
 
-Write a tailored cover letter. Reference specific experiences from the resume — do NOT fabricate."""
+Write a tailored cover letter addressed to {company_display}.
+Reference specific experiences from the resume — do NOT fabricate.
+IMPORTANT: Always use the company name "{company_display}" in the letter."""
 
     return _call_openai(api_key, COVER_LETTER_PROMPT, user_message, model)

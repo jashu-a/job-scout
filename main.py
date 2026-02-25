@@ -119,6 +119,7 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
     max_results = cfg.get("max_results_per_combo", 30)
     combos = cfg.get("search_combos", [])
     sources = cfg.get("sources", ["google_jobs", "linkedin", "tokyodev", "indeed"])
+    max_sends = cfg.get("max_telegram_sends", 50)
 
     # Google Drive config
     gdrive_enabled = cfg.get("gdrive_enabled", False) and not skip_drive and not skip_docs
@@ -188,7 +189,9 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
                     continue
 
                 new_jobs += 1
-                print(f"   [{j}] 🆕 NEW: {job['title']} @ {job['company']}")
+                desc_len = len(job.get("description", ""))
+                print(f"   [{j}] 🆕 NEW: {job['title']} @ {job['company']} [{job.get('source', '?')}]")
+                print(f"       📄 Description: {desc_len} chars")
 
                 # ── Step 1: AI Matching ──
                 print(f"       🤖 Scoring match...")
@@ -221,6 +224,13 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
                            job["link"], score, is_match)
 
                 if not is_match:
+                    continue
+
+                # Check if we've hit the Telegram send limit
+                if matched_sent >= max_sends:
+                    print(f"       ⏹️  Reached max Telegram sends ({max_sends}). Skipping remaining matches.")
+                    mark_seen(conn, job_hash, job["title"], job["company"], job["location"],
+                               job["link"], score, False)  # Mark as seen but not matched
                     continue
 
                 # ── Step 2: Generate Tailored Docs (if matched) ──
