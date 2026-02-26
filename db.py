@@ -32,6 +32,14 @@ def get_connection() -> sqlite3.Connection:
             created_at   TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+    # Migrate old databases: add link_hash column if missing
+    cursor = conn.execute("PRAGMA table_info(seen_jobs)")
+    columns = [row[1] for row in cursor.fetchall()]
+    if "link_hash" not in columns:
+        conn.execute("ALTER TABLE seen_jobs ADD COLUMN link_hash TEXT")
+        conn.commit()
+
     # Index for fast URL-based lookups
     conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_link_hash ON seen_jobs (link_hash)
