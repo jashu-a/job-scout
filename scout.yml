@@ -110,9 +110,6 @@ jobs:
           echo "📄 Resume file size:"
           wc -c resume.docx
           echo ""
-          echo "🔑 Service account exists:"
-          test -f service_account.json && echo "Yes" || echo "No"
-          echo ""
           echo "📋 Config:"
           cat config.yaml
 
@@ -120,9 +117,28 @@ jobs:
         uses: actions/cache@v4
         with:
           path: jobs.db
-          key: jobs-db-persistent
+          key: jobs-db-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            jobs-db-persistent
+            jobs-db-
+
+      - name: Check database state
+        run: |
+          if [ -f jobs.db ]; then
+            echo "✅ jobs.db restored from cache ($(stat -c%s jobs.db 2>/dev/null || stat -f%z jobs.db) bytes)"
+            python3 -c "
+          import sqlite3
+          conn = sqlite3.connect('jobs.db')
+          total = conn.execute('SELECT COUNT(*) FROM seen_jobs').fetchone()[0]
+          matched = conn.execute('SELECT COUNT(*) FROM seen_jobs WHERE matched=1').fetchone()[0]
+          print(f'   📊 {total} jobs in DB ({matched} matched)')
+          if total > 0:
+              for row in conn.execute('SELECT title, company, link FROM seen_jobs ORDER BY created_at DESC LIMIT 5'):
+                  print(f'   - {row[0]} @ {row[1]}')
+          conn.close()
+          "
+          else
+            echo "⚠️ jobs.db NOT found — starting fresh"
+          fi
 
       - name: Run Job Scout
         env:

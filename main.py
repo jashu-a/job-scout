@@ -24,7 +24,7 @@ from pathlib import Path
 
 import yaml
 
-from db import get_connection, make_hash, is_seen, mark_seen, get_stats
+from db import get_connection, make_hash, is_seen, is_duplicate, mark_seen, get_stats
 from scraper import scrape_jobs
 from matcher import match_resume_to_job, generate_tailored_resume, generate_cover_letter
 from notifier import send_job_message, send_summary_message
@@ -149,6 +149,13 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
 
     conn = get_connection()
 
+    # Log DB state to verify cache persistence between runs
+    db_stats = get_stats(conn)
+    print(f"\n📦 Database state: {db_stats['total_seen']} jobs seen, {db_stats['total_matched']} matched")
+    if db_stats['total_seen'] == 0:
+        print(f"   ⚠️  Database is empty — this may be the first run or cache was not restored")
+    print()
+
     # Create a temp dir for generated documents
     with tempfile.TemporaryDirectory(prefix="jobscout_") as tmp_dir:
 
@@ -182,8 +189,8 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
             for j, job in enumerate(jobs, 1):
                 job_hash = make_hash(job["title"], job["company"], job["location"])
 
-                # Dedup check
-                if is_seen(conn, job_hash):
+                # Dedup check (both content hash and URL)
+                if is_duplicate(conn, job_hash, job.get("link", "")):
                     skipped_dupes += 1
                     print(f"   [{j}] ♻️  SKIP (duplicate): {job['title']} @ {job['company']}")
                     continue

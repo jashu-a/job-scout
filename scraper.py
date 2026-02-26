@@ -50,7 +50,14 @@ _google_jobs_dead_regions: set = set()
 
 def _is_japan_search(location: str) -> bool:
     """Check if a search targets Japan."""
-    return any(kw in location.lower() for kw in ["japan", "tokyo", "osaka", "kyoto", "yokohama", "nagoya", "fukuoka"])
+    loc = location.lower().strip()
+    japan_keywords = ["japan", "tokyo", "osaka", "kyoto", "yokohama", "nagoya", "fukuoka"]
+    if any(kw in loc for kw in japan_keywords):
+        return True
+    # Also check if it's just "jp"
+    if loc == "jp":
+        return True
+    return False
 
 
 def _fetch_page_text(url: str, max_chars: int = 5000) -> str:
@@ -70,6 +77,159 @@ def _fetch_page_text(url: str, max_chars: int = 5000) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# LOCATION NORMALIZER
+# Handles: "Tokyo", "Japan", "NYC", "New York", "Tokyo, Japan", "US", etc.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Common city → full location mappings
+CITY_ALIASES = {
+    "nyc": "New York, NY",
+    "new york": "New York, NY",
+    "sf": "San Francisco, CA",
+    "san francisco": "San Francisco, CA",
+    "la": "Los Angeles, CA",
+    "los angeles": "Los Angeles, CA",
+    "chicago": "Chicago, IL",
+    "seattle": "Seattle, WA",
+    "austin": "Austin, TX",
+    "boston": "Boston, MA",
+    "denver": "Denver, CO",
+    "dc": "Washington, DC",
+    "washington": "Washington, DC",
+    "london": "London, United Kingdom",
+    "berlin": "Berlin, Germany",
+    "paris": "Paris, France",
+    "amsterdam": "Amsterdam, Netherlands",
+    "dublin": "Dublin, Ireland",
+    "sydney": "Sydney, Australia",
+    "melbourne": "Melbourne, Australia",
+    "toronto": "Toronto, Canada",
+    "vancouver": "Vancouver, Canada",
+    "tokyo": "Tokyo, Japan",
+    "osaka": "Osaka, Japan",
+    "kyoto": "Kyoto, Japan",
+    "yokohama": "Yokohama, Japan",
+    "nagoya": "Nagoya, Japan",
+    "fukuoka": "Fukuoka, Japan",
+    "singapore": "Singapore",
+    "bangalore": "Bangalore, India",
+    "mumbai": "Mumbai, India",
+    "hyderabad": "Hyderabad, India",
+    "pune": "Pune, India",
+    "dubai": "Dubai, United Arab Emirates",
+    "tel aviv": "Tel Aviv, Israel",
+    "sao paulo": "São Paulo, Brazil",
+}
+
+# Country name/code → full country + gl code
+COUNTRY_MAP = {
+    "us": ("United States", "us"),
+    "usa": ("United States", "us"),
+    "united states": ("United States", "us"),
+    "america": ("United States", "us"),
+    "uk": ("United Kingdom", "gb"),
+    "united kingdom": ("United Kingdom", "gb"),
+    "england": ("United Kingdom", "gb"),
+    "britain": ("United Kingdom", "gb"),
+    "canada": ("Canada", "ca"),
+    "ca": ("Canada", "ca"),
+    "germany": ("Germany", "de"),
+    "de": ("Germany", "de"),
+    "france": ("France", "fr"),
+    "fr": ("France", "fr"),
+    "australia": ("Australia", "au"),
+    "au": ("Australia", "au"),
+    "japan": ("Japan", "jp"),
+    "jp": ("Japan", "jp"),
+    "india": ("India", "in"),
+    "in": ("India", "in"),
+    "singapore": ("Singapore", "sg"),
+    "sg": ("Singapore", "sg"),
+    "netherlands": ("Netherlands", "nl"),
+    "nl": ("Netherlands", "nl"),
+    "ireland": ("Ireland", "ie"),
+    "ie": ("Ireland", "ie"),
+    "spain": ("Spain", "es"),
+    "es": ("Spain", "es"),
+    "italy": ("Italy", "it"),
+    "it": ("Italy", "it"),
+    "brazil": ("Brazil", "br"),
+    "br": ("Brazil", "br"),
+    "mexico": ("Mexico", "mx"),
+    "mx": ("Mexico", "mx"),
+    "south korea": ("South Korea", "kr"),
+    "korea": ("South Korea", "kr"),
+    "kr": ("South Korea", "kr"),
+    "israel": ("Israel", "il"),
+    "uae": ("United Arab Emirates", "ae"),
+    "remote": ("United States", "us"),
+}
+
+
+def normalize_location(raw_location: str) -> tuple[str, str]:
+    """
+    Normalize a location string into (serpapi_location, gl_code).
+
+    Handles:
+    - City only: "Tokyo" → ("Tokyo, Japan", "jp")
+    - Country only: "Japan" → ("Japan", "jp")
+    - Abbreviations: "NYC" → ("New York, NY", "us")
+    - Country codes: "US" → ("United States", "us")
+    - Already full: "Tokyo, Japan" → ("Tokyo, Japan", "jp")
+    - Remote: "Remote" → ("United States", "us")
+
+    Returns (location_for_serpapi, gl_code)
+    """
+    raw = raw_location.strip()
+    raw_lower = raw.lower().strip()
+
+    # Check city aliases first (exact match)
+    if raw_lower in CITY_ALIASES:
+        full_loc = CITY_ALIASES[raw_lower]
+        # Determine gl code from the full location
+        gl = ""
+        for key, (_, code) in COUNTRY_MAP.items():
+            if key in full_loc.lower():
+                gl = code
+                break
+        return full_loc, gl
+
+    # Check country map (exact match on name or code)
+    if raw_lower in COUNTRY_MAP:
+        country_name, gl = COUNTRY_MAP[raw_lower]
+        return country_name, gl
+
+    # Already has a comma (likely "City, Country" format) — try to extract gl
+    if "," in raw:
+        gl = ""
+        for key, (_, code) in COUNTRY_MAP.items():
+            if key in raw_lower:
+                gl = code
+                break
+        return raw, gl
+
+    # Single word that's not in our maps — try partial matching
+    # Check if it's a known city within a country
+    for city, full_loc in CITY_ALIASES.items():
+        if raw_lower in city or city in raw_lower:
+            gl = ""
+            for key, (_, code) in COUNTRY_MAP.items():
+                if key in full_loc.lower():
+                    gl = code
+                    break
+            return full_loc, gl
+
+    # Check partial country match
+    for key, (country_name, code) in COUNTRY_MAP.items():
+        if key in raw_lower or raw_lower in key:
+            return country_name, code
+
+    # Give up — return as-is with no gl code
+    print(f"  [LocationNorm] Could not normalize '{raw}' — using as-is")
+    return raw, ""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # SOURCE 1: SerpAPI Google Jobs (US/global only)
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -82,26 +242,20 @@ def scrape_google_jobs(
 
     chip = DAYS_BACK_MAP.get(days_back, "date_posted:week")
 
+    # Normalize location
+    norm_location, gl_code = normalize_location(location)
+
     params = {
         "engine": "google_jobs",
         "q": query,
-        "location": location,
+        "location": norm_location,
         "chips": chip,
         "api_key": api_key,
         "hl": "en",
     }
 
-    location_lower = location.lower()
-    country_map = {
-        "japan": "jp", "united states": "us", "usa": "us",
-        "united kingdom": "gb", "uk": "gb", "canada": "ca",
-        "germany": "de", "france": "fr", "australia": "au",
-        "india": "in", "singapore": "sg", "remote": "us",
-    }
-    for key, code in country_map.items():
-        if key in location_lower:
-            params["gl"] = code
-            break
+    if gl_code:
+        params["gl"] = gl_code
 
     all_jobs = []
     next_page_token = None
@@ -226,9 +380,10 @@ def _scrape_linkedin_via_serpapi(
     seniority: str = "", days_back: int = 7, max_results: int = 10,
 ) -> list[dict]:
     """Scrape LinkedIn via SerpAPI Google Search."""
-    query = f'site:linkedin.com/jobs/view {title} {location}'
+    norm_location, _ = normalize_location(location)
+    query = f'site:linkedin.com/jobs/view {title} {norm_location}'
     if seniority:
-        query = f'site:linkedin.com/jobs/view {seniority} {title} {location}'
+        query = f'site:linkedin.com/jobs/view {seniority} {title} {norm_location}'
 
     tbs = DAYS_BACK_GOOGLE_TBS.get(days_back, "qdr:w")
 
@@ -424,11 +579,12 @@ def _scrape_indeed_via_serpapi(
     seniority: str = "", days_back: int = 7, max_results: int = 10,
 ) -> list[dict]:
     """Scrape Indeed via SerpAPI Google Search."""
+    norm_location, _ = normalize_location(location)
     site = "jp.indeed.com" if _is_japan_search(location) else "indeed.com"
 
-    query = f'site:{site} {title} {location}'
+    query = f'site:{site} {title} {norm_location}'
     if seniority:
-        query = f'site:{site} {seniority} {title} {location}'
+        query = f'site:{site} {seniority} {title} {norm_location}'
 
     tbs = DAYS_BACK_GOOGLE_TBS.get(days_back, "qdr:w")
 
