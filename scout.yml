@@ -7,7 +7,7 @@ on:
       days_back:
         description: 'Jobs posted within last N days'
         required: false
-        default: '7'
+        default: '3'
         type: choice
         options: ['1', '3', '7', '14', '30']
       threshold:
@@ -27,7 +27,7 @@ on:
 jobs:
   scout:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repo
@@ -68,8 +68,8 @@ jobs:
                   {'title': 'Backend Developer', 'location': 'Tokyo, Japan', 'seniority': 'Mid level'},
                   {'title': 'Platform Engineer', 'location': 'Tokyo, Japan', 'seniority': 'Mid level'},
               ],
-              'sources': ['linkedin', 'tokyodev', 'indeed', 'google_jobs'],
-              'days_back': 7,
+              'sources': ['linkedin', 'tokyodev', 'japandev', 'gaijinpot', 'indeed', 'google_jobs'],
+              'days_back': 3,
               'match_threshold': 65,
               'max_results_per_combo': 50,
               'max_telegram_sends': 50,
@@ -112,33 +112,6 @@ jobs:
           echo ""
           echo "📋 Config:"
           cat config.yaml
-
-      - name: Restore jobs database (dedup cache)
-        uses: actions/cache@v4
-        with:
-          path: jobs.db
-          key: jobs-db-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            jobs-db-
-
-      - name: Check database state
-        run: |
-          if [ -f jobs.db ]; then
-            echo "✅ jobs.db restored from cache ($(stat -c%s jobs.db 2>/dev/null || stat -f%z jobs.db) bytes)"
-            python3 -c "
-          import sqlite3
-          conn = sqlite3.connect('jobs.db')
-          total = conn.execute('SELECT COUNT(*) FROM seen_jobs').fetchone()[0]
-          matched = conn.execute('SELECT COUNT(*) FROM seen_jobs WHERE matched=1').fetchone()[0]
-          print(f'   📊 {total} jobs in DB ({matched} matched)')
-          if total > 0:
-              for row in conn.execute('SELECT title, company, link FROM seen_jobs ORDER BY created_at DESC LIMIT 5'):
-                  print(f'   - {row[0]} @ {row[1]}')
-          conn.close()
-          "
-          else
-            echo "⚠️ jobs.db NOT found — starting fresh"
-          fi
 
       - name: Run Job Scout
         env:

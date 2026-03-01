@@ -391,7 +391,7 @@ def _scrape_linkedin_via_serpapi(
         "engine": "google",
         "q": query,
         "api_key": api_key,
-        "num": min(max_results, 10),
+        "num": 100,  # Max results per API call
         "tbs": tbs,
         "hl": "en",
     }
@@ -592,7 +592,7 @@ def _scrape_indeed_via_serpapi(
         "engine": "google",
         "q": query,
         "api_key": api_key,
-        "num": min(max_results, 10),
+        "num": 100,  # Max results per API call
         "tbs": tbs,
         "hl": "en",
     }
@@ -638,7 +638,7 @@ def _scrape_indeed_via_serpapi(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SOURCE 5: JapanDev (direct scrape — Japan only, curated tech jobs)
+# SOURCE 5: JapanDev (direct scrape — server-rendered HTML)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def scrape_japandev(title: str, max_results: int = 20) -> list[dict]:
@@ -654,47 +654,51 @@ def scrape_japandev(title: str, max_results: int = 20) -> list[dict]:
 
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        # JapanDev uses job card links pointing to /jobs/company-role-id
-        job_links = soup.select("a[href*='/jobs/']")
+        # JapanDev structure: h2 > a[href=/jobs/company/slug] for job titles
+        job_headings = soup.select("h2 a[href*='/jobs/']")
 
         seen_links = set()
         title_keywords = [kw for kw in title.lower().split() if len(kw) > 2]
 
-        for link_el in job_links:
-            href = link_el.get("href", "")
+        for heading in job_headings:
+            href = heading.get("href", "")
             if not href or href in seen_links or href == "/jobs" or href == "/jobs/":
                 continue
 
-            full_link = href if href.startswith("http") else f"https://japan-dev.com{href}"
+            full_link = f"https://japan-dev.com{href}" if not href.startswith("http") else href
             seen_links.add(href)
 
-            card_text = link_el.get_text(separator=" | ", strip=True)
-            if len(card_text) < 10:
+            job_title = heading.get_text(strip=True)
+            if not job_title or len(job_title) < 5:
                 continue
 
-            # Keyword match
-            card_lower = card_text.lower()
-            if title_keywords and not any(kw in card_lower for kw in title_keywords):
+            # Keyword match — broad matching for tech roles
+            if title_keywords and not any(kw in job_title.lower() for kw in title_keywords):
                 continue
 
-            # Parse title and company from card text
-            parts = [p.strip() for p in card_text.split("・") if p.strip()]
-            if len(parts) >= 2:
-                company = parts[0]
-                job_title = parts[1] if len(parts) > 1 else card_text
-            else:
-                parts = [p.strip() for p in card_text.split("|") if p.strip()]
-                job_title = parts[0] if parts else card_text
-                company = parts[1] if len(parts) > 1 else ""
+            # Company name is usually in the parent card, after the heading
+            parent = heading.find_parent("li") or heading.find_parent("div")
+            company = ""
+            if parent:
+                # Company name appears as text right after the h2, often with ・ separator
+                all_text = parent.get_text(separator="\n", strip=True)
+                lines = [l.strip() for l in all_text.split("\n") if l.strip()]
+                # Find the line after the job title
+                for i, line in enumerate(lines):
+                    if job_title in line and i + 1 < len(lines):
+                        company_line = lines[i + 1]
+                        # Clean up company name (remove descriptions after ・)
+                        company = company_line.split("・")[0].strip()
+                        break
 
-            # Fetch full description
+            # Fetch full description from job page
             description = _fetch_page_text(full_link, max_chars=4000)
 
             jobs.append({
                 "title": job_title[:100],
                 "company": company[:100],
                 "location": "Japan",
-                "description": description or card_text,
+                "description": description or job_title,
                 "link": full_link,
                 "posted_at": "",
                 "source": "JapanDev",
@@ -710,70 +714,50 @@ def scrape_japandev(title: str, max_results: int = 20) -> list[dict]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SOURCE 6: GaijinPot (direct scrape — Japan only, IT category)
+# SOURCE 6: GaijinPot (direct scrape — may fail from some IPs)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def scrape_gaijinpot(title: str, max_results: int = 20) -> list[dict]:
-    """Scrape GaijinPot IT jobs — English-friendly jobs in Japan."""
-    # category=22 is Information Technology
-    url = "https://jobs.gaijinpot.com/en/job?category=22"
+def scrape_gaijinpot(title: str, max_results: int = 15) -> list[dict]:
+    """Scrape GaijinPot IT jobs. May fail from GitHub Actions IPs."""
+    url = f"https://jobs.gaijinpot.com/en/job?category=22&keywords={quote_plus(title)}"
     jobs = []
 
     try:
-        resp = requests.get(url, timeout=30, headers=HEADERS)
+        resp = requests.get(url, timeout=15, headers=HEADERS)
         if resp.status_code != 200:
-            print(f"  [GaijinPot] Error {resp.status_code}")
+            print(f"  [GaijinPot] HTTP {resp.status_code} — site may block this IP")
             return jobs
 
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        # GaijinPot job cards — links to /en/job/NNNN/details/...
+        # Job detail links
         job_links = soup.select("a[href*='/en/job/'][href*='/details/']")
-
         seen_links = set()
-        title_keywords = [kw for kw in title.lower().split() if len(kw) > 2]
 
-        for link_el in job_links:
+        for link_el in job_links[:max_results]:
             href = link_el.get("href", "")
             if not href or href in seen_links:
                 continue
 
-            full_link = href if href.startswith("http") else f"https://jobs.gaijinpot.com{href}"
+            full_link = f"https://jobs.gaijinpot.com{href}" if not href.startswith("http") else href
             seen_links.add(href)
 
-            card_text = link_el.get_text(separator=" | ", strip=True)
-            if len(card_text) < 10:
+            card_text = link_el.get_text(strip=True)
+            if len(card_text) < 5:
                 continue
-
-            # Keyword match — be lenient since GaijinPot has fewer IT jobs
-            card_lower = card_text.lower()
-            tech_keywords = title_keywords + ["engineer", "developer", "software", "backend", "frontend", "devops", "sre", "platform", "data"]
-            if not any(kw in card_lower for kw in tech_keywords):
-                continue
-
-            # Parse title and company
-            parts = [p.strip() for p in card_text.split("|") if p.strip()]
-            job_title = parts[0] if parts else card_text
-            company = parts[-1] if len(parts) > 1 else ""
-
-            # Fetch full description
-            description = _fetch_page_text(full_link, max_chars=4000)
 
             jobs.append({
-                "title": job_title[:100],
-                "company": company[:100],
+                "title": card_text[:100],
+                "company": "",
                 "location": "Japan",
-                "description": description or card_text,
+                "description": card_text,
                 "link": full_link,
                 "posted_at": "",
                 "source": "GaijinPot",
             })
 
-            if len(jobs) >= max_results:
-                break
-
     except Exception as e:
-        print(f"  [GaijinPot] Scraping failed: {e}")
+        print(f"  [GaijinPot] Unreachable: {e}")
 
     return jobs
 
@@ -849,7 +833,7 @@ def scrape_jobs(
     if "japandev" in sources:
         if japan_search or "remote" in location.lower():
             print(f"  📡 Fetching from JapanDev (direct scrape — no SerpAPI)...")
-            jd = scrape_japandev(title, per_source_limit)
+            jd = scrape_japandev(title, max_results=per_source_limit)
             print(f"  [JapanDev] {len(jd)} results")
             all_jobs.extend(jd)
 
@@ -857,20 +841,20 @@ def scrape_jobs(
     if "gaijinpot" in sources:
         if japan_search or "remote" in location.lower():
             print(f"  📡 Fetching from GaijinPot (direct scrape — no SerpAPI)...")
-            gp = scrape_gaijinpot(title, per_source_limit)
+            gp = scrape_gaijinpot(title, max_results=per_source_limit)
             print(f"  [GaijinPot] {len(gp)} results")
             all_jobs.extend(gp)
 
     # ── Indeed ──
     if "indeed" in sources:
         if japan_search:
-            print(f"  📡 Fetching from Indeed Japan (direct scrape — no SerpAPI)...")
-            ind = _scrape_indeed_direct(title, location, per_source_limit)
+            # Indeed Japan blocks direct scraping (403) and SerpAPI returns poor results
+            print(f"  ⏭️  Skipping Indeed for Japan (blocked)")
         else:
             print(f"  📡 Fetching from Indeed (via SerpAPI)...")
             ind = _scrape_indeed_via_serpapi(api_key, title, location, seniority, days_back, per_source_limit)
-        print(f"  [Indeed] {len(ind)} results")
-        all_jobs.extend(ind)
+            print(f"  [Indeed] {len(ind)} results")
+            all_jobs.extend(ind)
 
     print(f"  📊 Total from all sources: {len(all_jobs)}")
     return all_jobs[:max_results]
