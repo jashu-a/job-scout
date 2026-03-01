@@ -127,8 +127,12 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
     gdrive_folder_id = cfg.get("gdrive_folder_id", "")
 
     if gdrive_enabled:
-        from drive_uploader import upload_to_drive
+        from drive_uploader import upload_to_drive, download_db, upload_db
         print("☁️  Google Drive upload: ENABLED")
+
+        # Download jobs.db from Drive for persistence between runs
+        print("\n📥 Restoring database from Google Drive...")
+        download_db(gdrive_folder_id)
     else:
         print("☁️  Google Drive upload: DISABLED")
 
@@ -362,6 +366,11 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
         send_summary_message(bot_token, chat_id, total_scraped, new_jobs, matched_sent, skipped_dupes)
 
     conn.close()
+
+    # Upload jobs.db back to Drive for persistence
+    if gdrive_enabled:
+        print("\n📤 Saving database to Google Drive...")
+        upload_db(gdrive_folder_id)
 
 
 def main():

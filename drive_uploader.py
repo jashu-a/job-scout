@@ -2,14 +2,17 @@
 Google Drive uploader using OAuth2 (personal account).
 Service accounts no longer have storage quota for regular Drive.
 This uses a refresh token generated once locally.
+
+Also handles jobs.db persistence — download at start, upload at end.
 """
 
+import io
 import os
 from pathlib import Path
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 
 def _get_credentials() -> Credentials:
@@ -34,6 +37,92 @@ def _get_credentials() -> Credentials:
     )
 
     return creds
+
+
+def _get_service():
+    """Build and return Drive API service."""
+    creds = _get_credentials()
+    return build("drive", "v3", credentials=creds, cache_discovery=False)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DATABASE PERSISTENCE (jobs.db on Google Drive)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _find_db_file(service, folder_id: str, filename: str = "jobs.db") -> str | None:
+    """Find the jobs.db file in the Drive folder. Returns file ID or None."""
+    query = f"name = '{filename}' and '{folder_id}' in parents and trashed = false"
+    results = service.files().list(q=query, fields="files(id, name, modifiedTime)").execute()
+    files = results.get("files", [])
+    if files:
+        return files[0]["id"]
+    return None
+
+
+def download_db(folder_id: str, local_path: str = "jobs.db") -> bool:
+    """Download jobs.db from Google Drive to local path. Returns True if found."""
+    try:
+        service = _get_service()
+        file_id = _find_db_file(service, folder_id)
+
+        if not file_id:
+            print("  📦 No jobs.db found in Drive — starting fresh")
+            return False
+
+        request = service.files().get_media(fileId=file_id)
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+
+        with open(local_path, "wb") as f:
+            f.write(fh.getvalue())
+
+        size = Path(local_path).stat().st_size
+        print(f"  📦 Downloaded jobs.db from Drive ({size:,} bytes)")
+        return True
+
+    except Exception as e:
+        print(f"  ⚠️  Failed to download jobs.db from Drive: {e}")
+        return False
+
+
+def upload_db(folder_id: str, local_path: str = "jobs.db") -> bool:
+    """Upload jobs.db to Google Drive (creates or overwrites)."""
+    try:
+        if not Path(local_path).exists():
+            print("  ⚠️  No local jobs.db to upload")
+            return False
+
+        service = _get_service()
+        file_id = _find_db_file(service, folder_id)
+
+        media = MediaFileUpload(local_path, mimetype="application/x-sqlite3")
+
+        if file_id:
+            # Update existing file
+            service.files().update(fileId=file_id, media_body=media).execute()
+            action = "Updated"
+        else:
+            # Create new file
+            file_meta = {"name": "jobs.db", "parents": [folder_id]}
+            service.files().create(body=file_meta, media_body=media, fields="id").execute()
+            action = "Created"
+
+        size = Path(local_path).stat().st_size
+        print(f"  📦 {action} jobs.db in Drive ({size:,} bytes)")
+        return True
+
+    except Exception as e:
+        print(f"  ⚠️  Failed to upload jobs.db to Drive: {e}")
+        return False
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# JOB DOCUMENT UPLOADS
+# ═══════════════════════════════════════════════════════════════════════════════
 
 
 def _sanitize_name(name: str) -> str:
