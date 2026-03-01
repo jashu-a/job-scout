@@ -91,6 +91,15 @@ def _normalize_url(url: str) -> str:
     if "tokyodev.com" in url:
         return url.split("?")[0].rstrip("/")
 
+    # JapanDev: strip query params
+    if "japan-dev.com" in url:
+        return url.split("?")[0].rstrip("/")
+
+    # GaijinPot: extract job ID from /en/job/NNNN/details/...
+    gp_match = re.search(r'gaijinpot\.com/en/job/(\d+)', url)
+    if gp_match:
+        return f"gaijinpot.com/job/{gp_match.group(1)}"
+
     # Generic: strip query params and trailing slashes
     return url.split("?")[0].rstrip("/")
 

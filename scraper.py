@@ -638,6 +638,147 @@ def _scrape_indeed_via_serpapi(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# SOURCE 5: JapanDev (direct scrape — Japan only, curated tech jobs)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def scrape_japandev(title: str, max_results: int = 20) -> list[dict]:
+    """Scrape JapanDev job listings — 283+ curated English tech jobs in Japan."""
+    url = "https://japan-dev.com/jobs"
+    jobs = []
+
+    try:
+        resp = requests.get(url, timeout=30, headers=HEADERS)
+        if resp.status_code != 200:
+            print(f"  [JapanDev] Error {resp.status_code}")
+            return jobs
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # JapanDev uses job card links pointing to /jobs/company-role-id
+        job_links = soup.select("a[href*='/jobs/']")
+
+        seen_links = set()
+        title_keywords = [kw for kw in title.lower().split() if len(kw) > 2]
+
+        for link_el in job_links:
+            href = link_el.get("href", "")
+            if not href or href in seen_links or href == "/jobs" or href == "/jobs/":
+                continue
+
+            full_link = href if href.startswith("http") else f"https://japan-dev.com{href}"
+            seen_links.add(href)
+
+            card_text = link_el.get_text(separator=" | ", strip=True)
+            if len(card_text) < 10:
+                continue
+
+            # Keyword match
+            card_lower = card_text.lower()
+            if title_keywords and not any(kw in card_lower for kw in title_keywords):
+                continue
+
+            # Parse title and company from card text
+            parts = [p.strip() for p in card_text.split("・") if p.strip()]
+            if len(parts) >= 2:
+                company = parts[0]
+                job_title = parts[1] if len(parts) > 1 else card_text
+            else:
+                parts = [p.strip() for p in card_text.split("|") if p.strip()]
+                job_title = parts[0] if parts else card_text
+                company = parts[1] if len(parts) > 1 else ""
+
+            # Fetch full description
+            description = _fetch_page_text(full_link, max_chars=4000)
+
+            jobs.append({
+                "title": job_title[:100],
+                "company": company[:100],
+                "location": "Japan",
+                "description": description or card_text,
+                "link": full_link,
+                "posted_at": "",
+                "source": "JapanDev",
+            })
+
+            if len(jobs) >= max_results:
+                break
+
+    except Exception as e:
+        print(f"  [JapanDev] Scraping failed: {e}")
+
+    return jobs
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SOURCE 6: GaijinPot (direct scrape — Japan only, IT category)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def scrape_gaijinpot(title: str, max_results: int = 20) -> list[dict]:
+    """Scrape GaijinPot IT jobs — English-friendly jobs in Japan."""
+    # category=22 is Information Technology
+    url = "https://jobs.gaijinpot.com/en/job?category=22"
+    jobs = []
+
+    try:
+        resp = requests.get(url, timeout=30, headers=HEADERS)
+        if resp.status_code != 200:
+            print(f"  [GaijinPot] Error {resp.status_code}")
+            return jobs
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # GaijinPot job cards — links to /en/job/NNNN/details/...
+        job_links = soup.select("a[href*='/en/job/'][href*='/details/']")
+
+        seen_links = set()
+        title_keywords = [kw for kw in title.lower().split() if len(kw) > 2]
+
+        for link_el in job_links:
+            href = link_el.get("href", "")
+            if not href or href in seen_links:
+                continue
+
+            full_link = href if href.startswith("http") else f"https://jobs.gaijinpot.com{href}"
+            seen_links.add(href)
+
+            card_text = link_el.get_text(separator=" | ", strip=True)
+            if len(card_text) < 10:
+                continue
+
+            # Keyword match — be lenient since GaijinPot has fewer IT jobs
+            card_lower = card_text.lower()
+            tech_keywords = title_keywords + ["engineer", "developer", "software", "backend", "frontend", "devops", "sre", "platform", "data"]
+            if not any(kw in card_lower for kw in tech_keywords):
+                continue
+
+            # Parse title and company
+            parts = [p.strip() for p in card_text.split("|") if p.strip()]
+            job_title = parts[0] if parts else card_text
+            company = parts[-1] if len(parts) > 1 else ""
+
+            # Fetch full description
+            description = _fetch_page_text(full_link, max_chars=4000)
+
+            jobs.append({
+                "title": job_title[:100],
+                "company": company[:100],
+                "location": "Japan",
+                "description": description or card_text,
+                "link": full_link,
+                "posted_at": "",
+                "source": "GaijinPot",
+            })
+
+            if len(jobs) >= max_results:
+                break
+
+    except Exception as e:
+        print(f"  [GaijinPot] Scraping failed: {e}")
+
+    return jobs
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # UNIFIED SCRAPER
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -662,14 +803,15 @@ def scrape_jobs(
     global _google_jobs_dead_regions
 
     if sources is None:
-        sources = ["google_jobs", "linkedin", "tokyodev", "indeed"]
+        sources = ["google_jobs", "linkedin", "tokyodev", "indeed", "japandev", "gaijinpot"]
 
     all_jobs = []
     japan_search = _is_japan_search(location)
     region_key = location.strip().lower()
 
-    # Per-source limits — generous to hit 20-25 new jobs per run
-    per_source_limit = max(max_results // max(len(sources) - 1, 1), 10)
+    # Per-source limits — generous to find plenty of new jobs
+    active_count = max(len(sources) - 1, 1)
+    per_source_limit = max(max_results // active_count, 10)
 
     # ── Google Jobs ──
     if "google_jobs" in sources:
@@ -702,6 +844,22 @@ def scrape_jobs(
             td = scrape_tokyodev(title, per_source_limit)
             print(f"  [TokyoDev] {len(td)} results")
             all_jobs.extend(td)
+
+    # ── JapanDev ──
+    if "japandev" in sources:
+        if japan_search or "remote" in location.lower():
+            print(f"  📡 Fetching from JapanDev (direct scrape — no SerpAPI)...")
+            jd = scrape_japandev(title, per_source_limit)
+            print(f"  [JapanDev] {len(jd)} results")
+            all_jobs.extend(jd)
+
+    # ── GaijinPot ──
+    if "gaijinpot" in sources:
+        if japan_search or "remote" in location.lower():
+            print(f"  📡 Fetching from GaijinPot (direct scrape — no SerpAPI)...")
+            gp = scrape_gaijinpot(title, per_source_limit)
+            print(f"  [GaijinPot] {len(gp)} results")
+            all_jobs.extend(gp)
 
     # ── Indeed ──
     if "indeed" in sources:
