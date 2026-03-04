@@ -3,7 +3,7 @@
 # ============================================================
 # Copy this to config.yaml and fill in your values.
 # config.yaml is gitignored — your secrets stay local.
-# For GitHub Actions, secrets are injected via workflow.
+# For GitHub Actions, config is auto-generated from secrets.
 
 # --- API Keys ---
 serpapi_key: "YOUR_SERPAPI_KEY"
@@ -12,27 +12,48 @@ telegram_bot_token: "YOUR_BOT_TOKEN"
 telegram_chat_id: "YOUR_CHAT_ID"
 
 # --- Resume ---
-resume_path: "resume.docx"
+resume_path: "resume.docx"        # Supports .docx and .pdf
 
 # --- Search Combos ---
+# Each combo scrapes all enabled sources. Location is auto-normalized
+# (e.g. "Tokyo", "Japan", "jp", "NYC" all work).
+# Seniority options: Internship, Entry level, Mid level, Senior level, Director, Executive
 search_combos:
   - title: "Software Engineer"
-    location: "New York, NY"
+    location: "Tokyo, Japan"
     seniority: "Mid level"
 
   - title: "Backend Developer"
-    location: "San Francisco, CA"
-    seniority: "Senior level"
+    location: "Tokyo, Japan"
+    seniority: "Mid level"
+
+  - title: "Platform Engineer"
+    location: "Tokyo, Japan"
+    seniority: "Mid level"
+
+# --- Sources ---
+# Available: linkedin, tokyodev, japandev, gaijinpot, indeed, google_jobs
+# Japan searches use direct scraping (0 SerpAPI credits)
+sources:
+  - linkedin
+  - tokyodev
+  - japandev
+  - gaijinpot
+  - indeed
+  - google_jobs
 
 # --- Filtering ---
-days_back: 7
-match_threshold: 65
-max_results_per_combo: 30
+days_back: 3                       # Jobs posted within last N days (1, 3, 7, 14, 30)
+match_threshold: 65                # Minimum AI match score (0-100) to notify
+max_results_per_combo: 50          # Max jobs fetched per search combo
+max_telegram_sends: 50             # Cap on Telegram messages per run
 
 # --- OpenAI ---
-openai_model: "gpt-4o-mini"
+openai_model: "gpt-4o-mini"       # gpt-4o-mini is cheapest; gpt-4o for better matching
 
-# --- Google Drive (optional) ---
-gdrive_enabled: false
-gdrive_credentials_path: "service_account.json"
+# --- Google Drive ---
+# OAuth2 credentials are set via environment variables:
+#   GDRIVE_CLIENT_ID, GDRIVE_CLIENT_SECRET, GDRIVE_REFRESH_TOKEN
+# The jobs.db dedup database is also persisted in this Drive folder.
+gdrive_enabled: true
 gdrive_folder_id: "YOUR_FOLDER_ID"
