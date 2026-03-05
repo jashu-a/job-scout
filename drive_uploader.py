@@ -59,14 +59,14 @@ def _find_db_file(service, folder_id: str, filename: str = "jobs.db") -> str | N
     return None
 
 
-def download_db(folder_id: str, local_path: str = "jobs.db") -> bool:
+def download_db(folder_id: str, local_path: str = "jobs.db", remote_name: str = "jobs.db") -> bool:
     """Download jobs.db from Google Drive to local path. Returns True if found."""
     try:
         service = _get_service()
-        file_id = _find_db_file(service, folder_id)
+        file_id = _find_db_file(service, folder_id, filename=remote_name)
 
         if not file_id:
-            print("  📦 No jobs.db found in Drive — starting fresh")
+            print(f"  📦 No {remote_name} found in Drive — starting fresh")
             return False
 
         request = service.files().get_media(fileId=file_id)
@@ -81,23 +81,23 @@ def download_db(folder_id: str, local_path: str = "jobs.db") -> bool:
             f.write(fh.getvalue())
 
         size = Path(local_path).stat().st_size
-        print(f"  📦 Downloaded jobs.db from Drive ({size:,} bytes)")
+        print(f"  📦 Downloaded {remote_name} from Drive ({size:,} bytes)")
         return True
 
     except Exception as e:
-        print(f"  ⚠️  Failed to download jobs.db from Drive: {e}")
+        print(f"  ⚠️  Failed to download {remote_name} from Drive: {e}")
         return False
 
 
-def upload_db(folder_id: str, local_path: str = "jobs.db") -> bool:
+def upload_db(folder_id: str, local_path: str = "jobs.db", remote_name: str = "jobs.db") -> bool:
     """Upload jobs.db to Google Drive (creates or overwrites)."""
     try:
         if not Path(local_path).exists():
-            print("  ⚠️  No local jobs.db to upload")
+            print(f"  ⚠️  No local {local_path} to upload")
             return False
 
         service = _get_service()
-        file_id = _find_db_file(service, folder_id)
+        file_id = _find_db_file(service, folder_id, filename=remote_name)
 
         media = MediaFileUpload(local_path, mimetype="application/x-sqlite3")
 
@@ -107,12 +107,12 @@ def upload_db(folder_id: str, local_path: str = "jobs.db") -> bool:
             action = "Updated"
         else:
             # Create new file
-            file_meta = {"name": "jobs.db", "parents": [folder_id]}
+            file_meta = {"name": remote_name, "parents": [folder_id]}
             service.files().create(body=file_meta, media_body=media, fields="id").execute()
             action = "Created"
 
         size = Path(local_path).stat().st_size
-        print(f"  📦 {action} jobs.db in Drive ({size:,} bytes)")
+        print(f"  📦 {action} {remote_name} in Drive ({size:,} bytes)")
         return True
 
     except Exception as e:

@@ -12,7 +12,7 @@ Built for software engineers targeting Japan, but works for any region.
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│                    GitHub Actions (daily cron)            │
+│                    GitHub Actions (daily cron)           │
 │                                                          │
 │  1. Download jobs.db from Google Drive                   │
 │  2. Scrape 6 job sources across your search combos       │

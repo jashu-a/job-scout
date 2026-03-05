@@ -125,14 +125,15 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
     gdrive_enabled = cfg.get("gdrive_enabled", False) and not skip_drive and not skip_docs
     gdrive_creds = cfg.get("gdrive_credentials_path", "")
     gdrive_folder_id = cfg.get("gdrive_folder_id", "")
+    db_remote_name = cfg.get("db_name", "jobs.db")
 
     if gdrive_enabled:
         from drive_uploader import upload_to_drive, download_db, upload_db
         print("☁️  Google Drive upload: ENABLED")
 
         # Download jobs.db from Drive for persistence between runs
-        print("\n📥 Restoring database from Google Drive...")
-        download_db(gdrive_folder_id)
+        print(f"\n📥 Restoring database from Google Drive ({db_remote_name})...")
+        download_db(gdrive_folder_id, remote_name=db_remote_name)
     else:
         print("☁️  Google Drive upload: DISABLED")
 
@@ -370,7 +371,7 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
     # Upload jobs.db back to Drive for persistence
     if gdrive_enabled:
         print("\n📤 Saving database to Google Drive...")
-        upload_db(gdrive_folder_id)
+        upload_db(gdrive_folder_id, remote_name=db_remote_name)
 
 
 def main():

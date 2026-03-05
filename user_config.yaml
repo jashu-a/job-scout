@@ -1,0 +1,33 @@
+# ============================================================
+# USER CONFIG — Personal search preferences
+# ============================================================
+# This file is committed to the repo but is unique per user.
+# When syncing code between repos, DON'T overwrite this file.
+# API keys and secrets come from GitHub Secrets, not here.
+
+search_combos:
+  - title: "Software Engineer"
+    location: "Tokyo, Japan"
+    seniority: "Mid level"
+
+  - title: "Backend Developer"
+    location: "Tokyo, Japan"
+    seniority: "Mid level"
+
+  - title: "Platform Engineer"
+    location: "Tokyo, Japan"
+    seniority: "Mid level"
+
+sources:
+  - linkedin
+  - tokyodev
+  - japandev
+  - gaijinpot
+  - indeed
+  - google_jobs
+
+days_back: 3
+match_threshold: 65
+max_results_per_combo: 50
+openai_model: "gpt-4o-mini"
+db_name: "jobs.db"

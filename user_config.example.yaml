@@ -1,0 +1,28 @@
+# ============================================================
+# USER CONFIG — Personal search preferences
+# ============================================================
+# Copy this to user_config.yaml and customize for your job search.
+# API keys and secrets come from GitHub Secrets, not here.
+
+search_combos:
+  - title: "Software Engineer"
+    location: "Tokyo, Japan"
+    seniority: "Mid level"
+
+# Available sources: linkedin, tokyodev, japandev, gaijinpot, indeed, google_jobs
+sources:
+  - linkedin
+  - tokyodev
+  - japandev
+  - gaijinpot
+  - indeed
+  - google_jobs
+
+days_back: 3
+match_threshold: 65
+max_results_per_combo: 50
+openai_model: "gpt-4o-mini"
+
+# IMPORTANT: Use a unique db_name if sharing a Google Drive folder
+# with another Job Scout user. Default is "jobs.db".
+db_name: "jobs.db"
