@@ -98,6 +98,164 @@ def _make_job_id(job: dict) -> str:
     return h[:8]
 
 
+def _process_new_job(
+    job: dict, conn, resume_text: str, resume_path: str,
+    openai_key: str, openai_model: str, threshold: int,
+    generate_docs: bool, gdrive_enabled: bool, gdrive_folder_id: str,
+    bot_token: str, chat_id: str, dry_run: bool, tmp_dir: str,
+    stats: dict,
+):
+    """
+    Process a single new job: AI match → generate docs → upload → notify.
+    Updates stats dict in-place. Returns True if job was matched and sent.
+    """
+    job_hash = make_hash(job["title"], job["company"], job["location"])
+
+    # AI Matching
+    print(f"       🤖 Scoring match...")
+    match_result = match_resume_to_job(
+        api_key=openai_key,
+        resume_text=resume_text,
+        job_title=job["title"],
+        job_company=job["company"],
+        job_description=job.get("description", ""),
+        model=openai_model,
+    )
+
+    score = match_result.get("score", 0)
+    reasoning = match_result.get("reasoning", "")
+    key_matches = match_result.get("key_matches", [])
+    key_gaps = match_result.get("key_gaps", [])
+    recommendation = match_result.get("recommendation", "")
+    seniority_fit = match_result.get("seniority_fit", "")
+
+    is_match = score >= threshold
+
+    if match_result.get("error"):
+        print(f"       ⚠️  AI Error: {match_result['error']}")
+
+    print(f"       Score: {score}/100 | {recommendation} | Seniority: {seniority_fit}")
+    print(f"       {'✅ MATCH' if is_match else '❌ Below threshold'}")
+
+    # Store in DB
+    mark_seen(conn, job_hash, job["title"], job["company"], job.get("location", ""),
+               job.get("link", ""), score, is_match)
+
+    if not is_match:
+        return False
+
+    # Check send limit
+    if stats["matched_sent"] >= stats["max_sends"]:
+        print(f"       ⏹️  Reached max Telegram sends ({stats['max_sends']})")
+        return False
+
+    # Generate docs
+    job_id = _make_job_id(job)
+    resume_docx_path = None
+    cover_letter_docx_path = None
+    drive_link = None
+
+    if generate_docs and not dry_run:
+        safe_company = _sanitize(job["company"])
+
+        print(f"       📝 Generating tailored resume...")
+        resume_data = generate_tailored_resume(
+            api_key=openai_key,
+            resume_text=resume_text,
+            job_title=job["title"],
+            job_company=job["company"],
+            job_description=job.get("description", ""),
+            model=openai_model,
+        )
+
+        if not resume_data.get("_error"):
+            resume_docx_path = str(Path(tmp_dir) / f"{safe_company}_{job_id}_resume.docx")
+            create_tailored_resume(
+                original_docx_path=resume_path,
+                resume_data=resume_data,
+                job_title=job["title"],
+                job_company=job["company"],
+                output_path=resume_docx_path,
+            )
+            print(f"       ✅ Resume created")
+
+            print(f"       📝 Generating cover letter...")
+            cl_data = generate_cover_letter(
+                api_key=openai_key,
+                resume_text=resume_text,
+                job_title=job["title"],
+                job_company=job["company"],
+                job_description=job.get("description", ""),
+                model=openai_model,
+            )
+
+            if not cl_data.get("_error"):
+                cover_letter_docx_path = str(Path(tmp_dir) / f"{safe_company}_{job_id}_cover_letter.docx")
+                create_cover_letter(
+                    cl_data,
+                    candidate_name=resume_data.get("candidate_name", "Candidate"),
+                    contact_info=resume_data.get("contact_info", ""),
+                    job_title=job["title"],
+                    job_company=job["company"],
+                    output_path=cover_letter_docx_path,
+                )
+                stats["docs_generated"] += 1
+                print(f"       ✅ Cover letter created")
+            else:
+                print(f"       ⚠️  Cover letter generation failed: {cl_data['_error']}")
+        else:
+            print(f"       ⚠️  Resume generation failed: {resume_data['_error']}")
+
+    # Upload to Drive
+    if gdrive_enabled and resume_docx_path and cover_letter_docx_path and not dry_run:
+        print(f"       ☁️  Uploading to Google Drive...")
+        drive_result = upload_to_drive(
+            parent_folder_id=gdrive_folder_id,
+            company=job["company"],
+            job_id=job_id,
+            resume_path=resume_docx_path,
+            cover_letter_path=cover_letter_docx_path,
+        )
+
+        if not drive_result.get("error"):
+            drive_link = drive_result["folder_link"]
+            stats["drive_uploaded"] += 1
+            print(f"       ✅ Uploaded → {drive_link}")
+        else:
+            print(f"       ⚠️  Drive upload failed: {drive_result['error']}")
+
+    # Send Telegram notification
+    if dry_run:
+        print(f"       🏃 DRY RUN — would send to Telegram")
+        stats["matched_sent"] += 1
+        return True
+
+    full_reasoning = reasoning
+    if drive_link:
+        full_reasoning += f"\n\n📁 Tailored docs: {drive_link}"
+
+    success = send_job_message(
+        bot_token=bot_token,
+        chat_id=chat_id,
+        title=job["title"],
+        company=job["company"],
+        location=job.get("location", ""),
+        link=job.get("link", ""),
+        score=score,
+        reasoning=full_reasoning,
+        key_matches=key_matches,
+        key_gaps=key_gaps,
+        posted_at=job.get("posted_at", ""),
+    )
+    if success:
+        stats["matched_sent"] += 1
+        print(f"       📨 Sent to Telegram!")
+    else:
+        print(f"       ❌ Failed to send to Telegram")
+
+    return success
+
+
 def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, skip_docs: bool = False):
     """Main pipeline: scrape → dedup → match → generate docs → upload → notify."""
 
@@ -162,13 +320,16 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
     else:
         print("📝 Tailored docs generation: DISABLED")
 
-    # Stats
-    total_scraped = 0
-    skipped_dupes = 0
-    new_jobs = 0
-    matched_sent = 0
-    docs_generated = 0
-    drive_uploaded = 0
+    # Stats (dict so _process_new_job can update in-place)
+    stats = {
+        "total_scraped": 0,
+        "skipped_dupes": 0,
+        "new_jobs": 0,
+        "matched_sent": 0,
+        "docs_generated": 0,
+        "drive_uploaded": 0,
+        "max_sends": max_sends,
+    }
 
     conn = get_connection()
 
@@ -206,177 +367,42 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
                 sources=sources,
             )
 
-            total_scraped += len(jobs)
-            print(f"   Found {len(jobs)} jobs from SerpAPI\n")
+            stats["total_scraped"] += len(jobs)
+            print(f"   Found {len(jobs)} jobs\n")
 
             for j, job in enumerate(jobs, 1):
                 job_hash = make_hash(job["title"], job["company"], job["location"])
 
                 # Dedup check (both content hash and URL)
                 if is_duplicate(conn, job_hash, job.get("link", "")):
-                    skipped_dupes += 1
+                    stats["skipped_dupes"] += 1
                     print(f"   [{j}] ♻️  SKIP (duplicate): {job['title']} @ {job['company']}")
                     continue
 
-                new_jobs += 1
+                stats["new_jobs"] += 1
                 desc_len = len(job.get("description", ""))
                 print(f"   [{j}] 🆕 NEW: {job['title']} @ {job['company']} [{job.get('source', '?')}]")
                 print(f"       📄 Description: {desc_len} chars")
 
-                # ── Step 1: AI Matching ──
-                print(f"       🤖 Scoring match...")
-                match_result = match_resume_to_job(
-                    api_key=openai_key,
-                    resume_text=resume_text,
-                    job_title=job["title"],
-                    job_company=job["company"],
-                    job_description=job["description"],
-                    model=openai_model,
+                _process_new_job(
+                    job=job, conn=conn, resume_text=resume_text, resume_path=resume_path,
+                    openai_key=openai_key, openai_model=openai_model, threshold=threshold,
+                    generate_docs=generate_docs, gdrive_enabled=gdrive_enabled,
+                    gdrive_folder_id=gdrive_folder_id, bot_token=bot_token, chat_id=chat_id,
+                    dry_run=dry_run, tmp_dir=tmp_dir, stats=stats,
                 )
-
-                score = match_result.get("score", 0)
-                reasoning = match_result.get("reasoning", "")
-                key_matches = match_result.get("key_matches", [])
-                key_gaps = match_result.get("key_gaps", [])
-                recommendation = match_result.get("recommendation", "")
-                seniority_fit = match_result.get("seniority_fit", "")
-
-                is_match = score >= threshold
-
-                if match_result.get("error"):
-                    print(f"       ⚠️  AI Error: {match_result['error']}")
-
-                print(f"       Score: {score}/100 | {recommendation} | Seniority: {seniority_fit}")
-                print(f"       {'✅ MATCH' if is_match else '❌ Below threshold'}")
-
-                # Store in DB (always, to avoid re-processing)
-                mark_seen(conn, job_hash, job["title"], job["company"], job["location"],
-                           job["link"], score, is_match)
-
-                if not is_match:
-                    continue
-
-                # Check if we've hit the Telegram send limit
-                if matched_sent >= max_sends:
-                    print(f"       ⏹️  Reached max Telegram sends ({max_sends}). Skipping remaining matches.")
-                    mark_seen(conn, job_hash, job["title"], job["company"], job["location"],
-                               job["link"], score, False)  # Mark as seen but not matched
-                    continue
-
-                # ── Step 2: Generate Tailored Docs (if matched) ──
-                job_id = _make_job_id(job)
-                resume_docx_path = None
-                cover_letter_docx_path = None
-                drive_link = None
-
-                if generate_docs and not dry_run:
-                    print(f"       📝 Generating tailored resume...")
-                    resume_data = generate_tailored_resume(
-                        api_key=openai_key,
-                        resume_text=resume_text,
-                        job_title=job["title"],
-                        job_company=job["company"],
-                        job_description=job["description"],
-                        model=openai_model,
-                    )
-
-                    if not resume_data.get("_error"):
-                        safe_company = _sanitize(job["company"])
-                        resume_docx_path = str(Path(tmp_dir) / f"{safe_company}_{job_id}_resume.docx")
-                        create_tailored_resume(
-                            original_docx_path=resume_path,
-                            resume_data=resume_data,
-                            job_title=job["title"],
-                            job_company=job["company"],
-                            output_path=resume_docx_path,
-                        )
-                        print(f"       ✅ Resume created")
-
-                        print(f"       📝 Generating cover letter...")
-                        cl_data = generate_cover_letter(
-                            api_key=openai_key,
-                            resume_text=resume_text,
-                            job_title=job["title"],
-                            job_company=job["company"],
-                            job_description=job["description"],
-                            model=openai_model,
-                        )
-
-                        if not cl_data.get("_error"):
-                            cover_letter_docx_path = str(Path(tmp_dir) / f"{safe_company}_{job_id}_cover_letter.docx")
-                            create_cover_letter(
-                                cl_data,
-                                candidate_name=resume_data.get("candidate_name", "Candidate"),
-                                contact_info=resume_data.get("contact_info", ""),
-                                job_title=job["title"],
-                                job_company=job["company"],
-                                output_path=cover_letter_docx_path,
-                            )
-                            docs_generated += 1
-                            print(f"       ✅ Cover letter created")
-                        else:
-                            print(f"       ⚠️  Cover letter generation failed: {cl_data['_error']}")
-                    else:
-                        print(f"       ⚠️  Resume generation failed: {resume_data['_error']}")
-
-                # ── Step 3: Upload to Google Drive ──
-                if gdrive_enabled and resume_docx_path and cover_letter_docx_path and not dry_run:
-                    print(f"       ☁️  Uploading to Google Drive...")
-                    drive_result = upload_to_drive(
-                        parent_folder_id=gdrive_folder_id,
-                        company=job["company"],
-                        job_id=job_id,
-                        resume_path=resume_docx_path,
-                        cover_letter_path=cover_letter_docx_path,
-                    )
-
-                    if not drive_result.get("error"):
-                        drive_link = drive_result["folder_link"]
-                        drive_uploaded += 1
-                        print(f"       ✅ Uploaded → {drive_link}")
-                    else:
-                        print(f"       ⚠️  Drive upload failed: {drive_result['error']}")
-
-                # ── Step 4: Send Telegram notification ──
-                if dry_run:
-                    print(f"       🏃 DRY RUN — would send to Telegram")
-                else:
-                    # Append Drive link to reasoning if available
-                    full_reasoning = reasoning
-                    if drive_link:
-                        full_reasoning += f"\n\n📁 Tailored docs: {drive_link}"
-
-                    success = send_job_message(
-                        bot_token=bot_token,
-                        chat_id=chat_id,
-                        title=job["title"],
-                        company=job["company"],
-                        location=job["location"],
-                        link=job["link"],
-                        score=score,
-                        reasoning=full_reasoning,
-                        key_matches=key_matches,
-                        key_gaps=key_gaps,
-                        posted_at=job.get("posted_at", ""),
-                    )
-                    if success:
-                        matched_sent += 1
-                        print(f"       📨 Sent to Telegram!")
-                    else:
-                        print(f"       ❌ Failed to send to Telegram")
 
     # ══════════════════════════════════════════════════════════════════════
     # AUTO-EXPANSION: If not enough matches, widen the search
     # ══════════════════════════════════════════════════════════════════════
-    if matched_sent < min_matches_per_run and not dry_run:
+    if stats["matched_sent"] < min_matches_per_run and not dry_run:
         print(f"\n{'='*60}")
-        print(f"📈 EXPANSION PASS — only {matched_sent} matches so far (target: {min_matches_per_run})")
+        print(f"📈 EXPANSION PASS — only {stats['matched_sent']} matches so far (target: {min_matches_per_run})")
         print(f"{'='*60}")
 
         already_searched = {c["title"].lower() for c in combos}
         expansion_combos = []
 
-        # Build expanded combos from related titles only (new titles we haven't tried)
         for combo in combos:
             base_title = combo["title"].lower()
             related = TITLE_EXPANSIONS.get(base_title, [])
@@ -389,8 +415,6 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
                         "seniority": combo.get("seniority", ""),
                     })
 
-        # Also retry original titles with wider date range, but ONLY for SerpAPI sources
-        # (static sources like TokyoDev/JapanDev/GaijinPot return the same page regardless)
         serpapi_only_sources = [s for s in sources if s in ("google_jobs", "indeed")]
         wider_date_combos = []
         if serpapi_only_sources and days_back < 14:
@@ -409,7 +433,7 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
                 print(f"\n   🔄 Phase 1: Trying {len(expansion_combos)} new title variations\n")
 
                 for i, combo in enumerate(expansion_combos, 1):
-                    if matched_sent >= min_matches_per_run:
+                    if stats["matched_sent"] >= min_matches_per_run:
                         print(f"\n   ✅ Reached {min_matches_per_run} matches — stopping expansion")
                         break
 
@@ -425,125 +449,39 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
                         return is_seen(conn, make_hash(job_title, job_company, job_location))
 
                     jobs = scrape_jobs(
-                        api_key=serpapi_key,
-                        title=title,
-                        location=location,
-                        seniority=seniority,
-                        days_back=days_back,
-                        max_results=max_results,
-                        is_seen_fn=_is_seen_check,
-                        sources=sources,
+                        api_key=serpapi_key, title=title, location=location,
+                        seniority=seniority, days_back=days_back,
+                        max_results=max_results, is_seen_fn=_is_seen_check, sources=sources,
                     )
 
-                    total_scraped += len(jobs)
+                    stats["total_scraped"] += len(jobs)
                     print(f"   Found {len(jobs)} jobs\n")
 
                     for j, job in enumerate(jobs, 1):
                         job_hash = make_hash(job["title"], job["company"], job["location"])
-
                         if is_duplicate(conn, job_hash, job.get("link", "")):
-                            skipped_dupes += 1
+                            stats["skipped_dupes"] += 1
                             print(f"   [{j}] ♻️  SKIP (duplicate): {job['title']} @ {job['company']}")
                             continue
 
-                        new_jobs += 1
-                        desc_len = len(job.get("description", ""))
+                        stats["new_jobs"] += 1
                         print(f"   [{j}] 🆕 NEW: {job['title']} @ {job['company']} [{job.get('source', '?')}]")
-                        print(f"       📄 Description: {desc_len} chars")
+                        print(f"       📄 Description: {len(job.get('description', ''))} chars")
 
-                        print(f"       🤖 Scoring match...")
-                        match_result = match_resume_to_job(
-                            resume_text=resume_text,
-                            job_title=job["title"],
-                            job_company=job["company"],
-                            job_description=job.get("description", ""),
-                            job_location=job.get("location", ""),
-                            api_key=openai_key,
-                            model=openai_model,
+                        _process_new_job(
+                            job=job, conn=conn, resume_text=resume_text, resume_path=resume_path,
+                            openai_key=openai_key, openai_model=openai_model, threshold=threshold,
+                            generate_docs=generate_docs, gdrive_enabled=gdrive_enabled,
+                            gdrive_folder_id=gdrive_folder_id, bot_token=bot_token, chat_id=chat_id,
+                            dry_run=dry_run, tmp_dir=tmp_dir, stats=stats,
                         )
 
-                        score = match_result.get("score", 0)
-                        reasoning = match_result.get("reasoning", "")
-                        key_matches = match_result.get("key_matches", "")
-                        key_gaps = match_result.get("key_gaps", "")
-
-                        mark_seen(conn, job_hash, job["title"], job["company"],
-                                  job.get("location", ""), job.get("link", ""),
-                                  score, score >= threshold)
-
-                        if score < threshold:
-                            print(f"       ❌ Score {score} < {threshold} threshold — skipping")
-                            continue
-
-                        print(f"       ✅ Score {score} — MATCH!")
-
-                        folder_link = ""
-                        resume_docx_path = None
-                        cover_letter_docx_path = None
-
-                        if generate_docs:
-                            job_id = _make_job_id(job)
-                            company_safe = _sanitize(job["company"]) or "Unknown"
-                            folder_name = f"{company_safe}_{job_id}"
-
-                            print(f"       📝 Generating tailored resume...")
-                            tailored = generate_tailored_resume(
-                                resume_text=resume_text,
-                                job_title=job["title"],
-                                job_company=job["company"],
-                                job_description=job.get("description", ""),
-                                api_key=openai_key,
-                                model=openai_model,
-                            )
-
-                            resume_docx_path = os.path.join(tmp_dir, f"{folder_name}_resume.docx")
-                            create_tailored_resume(resume_path, tailored, resume_docx_path)
-
-                            print(f"       📝 Generating cover letter...")
-                            cover_text = generate_cover_letter(
-                                resume_text=resume_text,
-                                job_title=job["title"],
-                                job_company=job["company"],
-                                job_description=job.get("description", ""),
-                                api_key=openai_key,
-                                model=openai_model,
-                            )
-
-                            cover_letter_docx_path = os.path.join(tmp_dir, f"{folder_name}_cover.docx")
-                            create_cover_letter(cover_text, job["title"], job["company"], cover_letter_docx_path)
-                            docs_generated += 1
-
-                            if gdrive_enabled and resume_docx_path and cover_letter_docx_path:
-                                print(f"       ☁️  Uploading to Drive ({folder_name})...")
-                                folder_link = upload_to_drive(
-                                    folder_id=gdrive_folder_id,
-                                    folder_name=folder_name,
-                                    files=[resume_docx_path, cover_letter_docx_path],
-                                )
-                                if folder_link:
-                                    drive_uploaded += 1
-
-                        if matched_sent < max_sends:
-                            success = send_job_match(
-                                bot_token=bot_token, chat_id=chat_id,
-                                title=job["title"], company=job["company"],
-                                location=job.get("location", ""), link=job.get("link", ""),
-                                score=score, reasoning=reasoning,
-                                folder_link=folder_link,
-                                key_matches=key_matches,
-                                key_gaps=key_gaps,
-                                posted_at=job.get("posted_at", ""),
-                            )
-                            if success:
-                                matched_sent += 1
-                                print(f"       📨 Sent to Telegram!")
-
-            # Phase 2: Wider date range, SerpAPI sources only (if still below target)
-            if matched_sent < min_matches_per_run and wider_date_combos and serpapi_only_sources:
+            # Phase 2: Wider date range, SerpAPI sources only
+            if stats["matched_sent"] < min_matches_per_run and wider_date_combos and serpapi_only_sources:
                 print(f"\n   🔄 Phase 2: Retrying original titles with days_back=14 (SerpAPI sources only)\n")
 
                 for i, combo in enumerate(wider_date_combos, 1):
-                    if matched_sent >= min_matches_per_run:
+                    if stats["matched_sent"] >= min_matches_per_run:
                         print(f"\n   ✅ Reached {min_matches_per_run} matches — stopping expansion")
                         break
 
@@ -559,137 +497,53 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
                         return is_seen(conn, make_hash(job_title, job_company, job_location))
 
                     jobs = scrape_jobs(
-                        api_key=serpapi_key,
-                        title=title,
-                        location=location,
-                        seniority=seniority,
-                        days_back=14,
-                        max_results=max_results,
-                        is_seen_fn=_is_seen_check,
+                        api_key=serpapi_key, title=title, location=location,
+                        seniority=seniority, days_back=14,
+                        max_results=max_results, is_seen_fn=_is_seen_check,
                         sources=serpapi_only_sources,
                     )
 
-                    total_scraped += len(jobs)
+                    stats["total_scraped"] += len(jobs)
                     print(f"   Found {len(jobs)} jobs\n")
 
                     for j, job in enumerate(jobs, 1):
                         job_hash = make_hash(job["title"], job["company"], job["location"])
-
                         if is_duplicate(conn, job_hash, job.get("link", "")):
-                            skipped_dupes += 1
+                            stats["skipped_dupes"] += 1
                             print(f"   [{j}] ♻️  SKIP (duplicate): {job['title']} @ {job['company']}")
                             continue
 
-                        new_jobs += 1
-                        desc_len = len(job.get("description", ""))
+                        stats["new_jobs"] += 1
                         print(f"   [{j}] 🆕 NEW: {job['title']} @ {job['company']} [{job.get('source', '?')}]")
-                        print(f"       📄 Description: {desc_len} chars")
+                        print(f"       📄 Description: {len(job.get('description', ''))} chars")
 
-                        print(f"       🤖 Scoring match...")
-                        match_result = match_resume_to_job(
-                            resume_text=resume_text,
-                            job_title=job["title"],
-                            job_company=job["company"],
-                            job_description=job.get("description", ""),
-                            job_location=job.get("location", ""),
-                            api_key=openai_key,
-                            model=openai_model,
+                        _process_new_job(
+                            job=job, conn=conn, resume_text=resume_text, resume_path=resume_path,
+                            openai_key=openai_key, openai_model=openai_model, threshold=threshold,
+                            generate_docs=generate_docs, gdrive_enabled=gdrive_enabled,
+                            gdrive_folder_id=gdrive_folder_id, bot_token=bot_token, chat_id=chat_id,
+                            dry_run=dry_run, tmp_dir=tmp_dir, stats=stats,
                         )
-
-                        score = match_result.get("score", 0)
-                        reasoning = match_result.get("reasoning", "")
-                        key_matches = match_result.get("key_matches", "")
-                        key_gaps = match_result.get("key_gaps", "")
-
-                        mark_seen(conn, job_hash, job["title"], job["company"],
-                                  job.get("location", ""), job.get("link", ""),
-                                  score, score >= threshold)
-
-                        if score < threshold:
-                            print(f"       ❌ Score {score} < {threshold} threshold — skipping")
-                            continue
-
-                        print(f"       ✅ Score {score} — MATCH!")
-
-                        folder_link = ""
-                        resume_docx_path = None
-                        cover_letter_docx_path = None
-
-                        if generate_docs:
-                            job_id = _make_job_id(job)
-                            company_safe = _sanitize(job["company"]) or "Unknown"
-                            folder_name = f"{company_safe}_{job_id}"
-
-                            print(f"       📝 Generating tailored resume...")
-                            tailored = generate_tailored_resume(
-                                resume_text=resume_text,
-                                job_title=job["title"],
-                                job_company=job["company"],
-                                job_description=job.get("description", ""),
-                                api_key=openai_key,
-                                model=openai_model,
-                            )
-
-                            resume_docx_path = os.path.join(tmp_dir, f"{folder_name}_resume.docx")
-                            create_tailored_resume(resume_path, tailored, resume_docx_path)
-
-                            print(f"       📝 Generating cover letter...")
-                            cover_text = generate_cover_letter(
-                                resume_text=resume_text,
-                                job_title=job["title"],
-                                job_company=job["company"],
-                                job_description=job.get("description", ""),
-                                api_key=openai_key,
-                                model=openai_model,
-                            )
-
-                            cover_letter_docx_path = os.path.join(tmp_dir, f"{folder_name}_cover.docx")
-                            create_cover_letter(cover_text, job["title"], job["company"], cover_letter_docx_path)
-                            docs_generated += 1
-
-                            if gdrive_enabled and resume_docx_path and cover_letter_docx_path:
-                                print(f"       ☁️  Uploading to Drive ({folder_name})...")
-                                folder_link = upload_to_drive(
-                                    folder_id=gdrive_folder_id,
-                                    folder_name=folder_name,
-                                    files=[resume_docx_path, cover_letter_docx_path],
-                                )
-                                if folder_link:
-                                    drive_uploaded += 1
-
-                        if matched_sent < max_sends:
-                            success = send_job_match(
-                                bot_token=bot_token, chat_id=chat_id,
-                                title=job["title"], company=job["company"],
-                                location=job.get("location", ""), link=job.get("link", ""),
-                                score=score, reasoning=reasoning,
-                                folder_link=folder_link,
-                                key_matches=key_matches,
-                                key_gaps=key_gaps,
-                                posted_at=job.get("posted_at", ""),
-                            )
-                            if success:
-                                matched_sent += 1
-                                print(f"       📨 Sent to Telegram!")
 
     # Summary
     print(f"\n{'='*60}")
     print(f"📋 RUN SUMMARY")
     print(f"{'='*60}")
-    print(f"   🔍 Total scraped:         {total_scraped}")
-    print(f"   🆕 New jobs:               {new_jobs}")
-    print(f"   ♻️  Duplicates skipped:     {skipped_dupes}")
-    print(f"   🎯 Matched & sent:         {matched_sent}")
-    print(f"   📝 Tailored docs created:  {docs_generated}")
-    print(f"   ☁️  Uploaded to Drive:      {drive_uploaded}")
+    print(f"   🔍 Total scraped:         {stats['total_scraped']}")
+    print(f"   🆕 New jobs:               {stats['new_jobs']}")
+    print(f"   ♻️  Duplicates skipped:     {stats['skipped_dupes']}")
+    print(f"   🎯 Matched & sent:         {stats['matched_sent']}")
+    print(f"   📝 Tailored docs created:  {stats['docs_generated']}")
+    print(f"   ☁️  Uploaded to Drive:      {stats['drive_uploaded']}")
 
     db_stats = get_stats(conn)
     print(f"   📦 Total in database:      {db_stats['total_seen']}")
     print(f"{'='*60}\n")
 
     # Send summary to Telegram
-    if not dry_run and matched_sent > 0:
-        send_summary_message(bot_token, chat_id, total_scraped, new_jobs, matched_sent, skipped_dupes)
+    if not dry_run and stats["matched_sent"] > 0:
+        send_summary_message(bot_token, chat_id, stats["total_scraped"],
+                             stats["new_jobs"], stats["matched_sent"], stats["skipped_dupes"])
 
     conn.close()
 
