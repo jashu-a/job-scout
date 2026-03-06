@@ -27,8 +27,11 @@ import yaml
 from db import get_connection, make_hash, is_seen, is_duplicate, mark_seen, get_stats
 from scraper import scrape_jobs
 from matcher import match_resume_to_job, generate_tailored_resume, generate_cover_letter
+from doc_generator import create_tailored_resume, create_cover_letter
+from drive_uploader import upload_to_drive, download_db, upload_db
 from notifier import send_job_message, send_summary_message
 from resume_parser import extract_resume_text
+import os
 
 
 def load_config(config_path: str) -> dict:
@@ -304,7 +307,6 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
     db_remote_name = cfg.get("db_name", "jobs.db")
 
     if gdrive_enabled:
-        from drive_uploader import upload_to_drive, download_db, upload_db
         print("☁️  Google Drive upload: ENABLED")
 
         # Download jobs.db from Drive for persistence between runs
@@ -315,7 +317,6 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
 
     generate_docs = not skip_docs
     if generate_docs:
-        from doc_generator import create_tailored_resume, create_cover_letter
         print("📝 Tailored docs generation: ENABLED")
     else:
         print("📝 Tailored docs generation: DISABLED")
