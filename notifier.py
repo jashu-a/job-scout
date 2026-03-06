@@ -124,7 +124,7 @@ def send_error_message(
 
     if possible_cause:
         message += f"\n💡 <b>Possible cause:</b> {possible_cause}\n"
-
+    
     message += f"━━━━━━━━━━━━━━━━━━━"
 
     url = TELEGRAM_API.format(token=bot_token)
