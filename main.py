@@ -285,19 +285,53 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
 
     # Related titles for auto-expansion when results are low
     TITLE_EXPANSIONS = {
+        # Software Engineering
         "software engineer": ["Full Stack Developer", "Application Developer", "Web Developer"],
         "backend developer": ["Backend Engineer", "API Developer", "Server-Side Engineer"],
         "backend engineer": ["Backend Developer", "API Developer", "Server-Side Engineer"],
         "frontend developer": ["Frontend Engineer", "UI Developer", "React Developer"],
         "frontend engineer": ["Frontend Developer", "UI Developer", "React Developer"],
+        "full stack developer": ["Fullstack Engineer", "Software Engineer", "Web Developer"],
+        "fullstack engineer": ["Full Stack Developer", "Software Engineer", "Web Developer"],
+        # Infrastructure / DevOps
         "platform engineer": ["DevOps Engineer", "SRE", "Cloud Engineer", "Infrastructure Engineer"],
         "devops engineer": ["Platform Engineer", "SRE", "Cloud Engineer", "Infrastructure Engineer"],
         "sre": ["Site Reliability Engineer", "DevOps Engineer", "Platform Engineer"],
-        "data engineer": ["Data Platform Engineer", "ETL Developer", "Analytics Engineer"],
-        "data scientist": ["ML Engineer", "Machine Learning Engineer", "AI Engineer"],
-        "ml engineer": ["Machine Learning Engineer", "Data Scientist", "AI Engineer"],
-        "full stack developer": ["Fullstack Engineer", "Software Engineer", "Web Developer"],
         "cloud engineer": ["DevOps Engineer", "Platform Engineer", "AWS Engineer"],
+        "infrastructure engineer": ["Cloud Engineer", "Platform Engineer", "DevOps Engineer"],
+        # Data Engineering
+        "data engineer": ["Data Platform Engineer", "ETL Developer", "Analytics Engineer"],
+        "analytics engineer": ["Data Engineer", "BI Engineer", "Data Analyst"],
+        # Data Science / ML / AI
+        "data scientist": ["ML Engineer", "Machine Learning Engineer", "AI Engineer", "Research Scientist"],
+        "ml engineer": ["Machine Learning Engineer", "Data Scientist", "AI Engineer", "MLOps Engineer"],
+        "machine learning engineer": ["ML Engineer", "AI Engineer", "Data Scientist", "Deep Learning Engineer"],
+        "ai engineer": ["Machine Learning Engineer", "ML Engineer", "NLP Engineer", "AI Research Engineer"],
+        "ai research engineer": ["Research Scientist", "Machine Learning Engineer", "AI Engineer"],
+        "nlp engineer": ["AI Engineer", "Machine Learning Engineer", "Computational Linguist"],
+        "mlops engineer": ["ML Engineer", "Platform Engineer", "Data Engineer"],
+        "deep learning engineer": ["Machine Learning Engineer", "AI Engineer", "Computer Vision Engineer"],
+        "computer vision engineer": ["Deep Learning Engineer", "AI Engineer", "Machine Learning Engineer"],
+        # Cybersecurity
+        "cybersecurity analyst": ["Security Analyst", "SOC Analyst", "Information Security Analyst", "Threat Analyst"],
+        "security analyst": ["Cybersecurity Analyst", "SOC Analyst", "Threat Intelligence Analyst"],
+        "security engineer": ["Cybersecurity Engineer", "Cloud Security Engineer", "Application Security Engineer"],
+        "cybersecurity engineer": ["Security Engineer", "Penetration Tester", "Security Architect"],
+        "penetration tester": ["Ethical Hacker", "Security Consultant", "Offensive Security Engineer"],
+        "soc analyst": ["Security Analyst", "Cybersecurity Analyst", "Incident Response Analyst"],
+        "information security analyst": ["Cybersecurity Analyst", "Security Analyst", "GRC Analyst"],
+        "security architect": ["Cybersecurity Engineer", "Security Engineer", "Cloud Security Architect"],
+        "cloud security engineer": ["Security Engineer", "DevSecOps Engineer", "Cloud Security Architect"],
+        "devsecops engineer": ["DevOps Engineer", "Security Engineer", "Cloud Security Engineer"],
+        # Project / Product Management
+        "project manager": ["Program Manager", "Technical Project Manager", "Scrum Master", "Delivery Manager"],
+        "program manager": ["Project Manager", "Technical Program Manager", "Portfolio Manager"],
+        "technical project manager": ["Project Manager", "Engineering Manager", "Scrum Master"],
+        "product manager": ["Product Owner", "Technical Product Manager", "Program Manager"],
+        "product owner": ["Product Manager", "Scrum Master", "Business Analyst"],
+        "scrum master": ["Agile Coach", "Project Manager", "Delivery Manager"],
+        "engineering manager": ["Technical Lead", "Development Manager", "Team Lead"],
+        "technical program manager": ["Program Manager", "Engineering Manager", "Technical Project Manager"],
     }
 
     # Google Drive config
