@@ -63,27 +63,61 @@ Return ONLY a valid JSON object (no markdown fences, no extra text):
 # ── PROMPT 2: Tailored Resume ────────────────────────────────────────────────
 
 TAILORED_RESUME_PROMPT = """\
-You are an expert resume writer. You will receive a candidate's original resume TEXT and a
-specific job posting. Your task is to produce TARGETED TEXT REPLACEMENTS that make this resume
-clearly tailored for this specific role.
+You are an expert resume writer who specializes in ATS (Applicant Tracking System) optimization.
+You will receive a candidate's original resume TEXT and a specific job posting. Your task is to
+produce TARGETED TEXT REPLACEMENTS that maximize the resume's ATS score and pass automated filters.
+
+## ATS Optimization Strategy
+
+Most resumes are rejected by ATS before a human ever sees them. Your goal is to beat the ATS by:
+
+1. **Keyword matching** — Extract EVERY important keyword, skill, tool, technology, certification,
+   and qualification from the job description. Weave these EXACT terms into the resume naturally.
+   ATS systems do literal string matching — "Kubernetes" won't match "K8s", "CI/CD" won't match
+   "continuous deployment". Use the EXACT phrasing from the JD.
+
+2. **Keyword density** — Important keywords should appear 2-3 times across different sections
+   (summary, experience bullets, skills). ATS often scores by frequency, not just presence.
+
+3. **Skills section optimization** — List hard skills using the JD's exact terms. If the JD says
+   "Amazon Web Services (AWS)", write that — not just "AWS". Include both the acronym and full
+   form where possible to catch both ATS patterns.
+
+4. **Action verbs that ATS values** — Use strong verbs that match JD language: "architected",
+   "implemented", "automated", "deployed", "optimized", "managed", "designed", "integrated".
+
+5. **Quantify achievements** — ATS-passing resumes that reach humans need numbers to stand out.
+   Where the original resume has vague statements, add plausible metrics based on context
+   (e.g., "managed servers" → "managed 50+ production servers across 3 environments").
+   Only quantify if reasonable from the context — do NOT invent metrics from nothing.
 
 ## Critical Rules
 
 1. **Every replacement must be VISIBLY DIFFERENT** — a reader comparing the original and tailored
    version side by side should immediately notice the changes. Don't just swap single words.
-2. **Never fabricate** — only rephrase, reorder, and emphasize what exists. But DO rephrase
-   aggressively to match the JD's terminology and priorities.
+2. **NEVER FABRICATE OR INVENT EXPERIENCE** — this is the most important rule.
+   - ONLY rephrase, reorder, and emphasize what ALREADY EXISTS in the resume.
+   - NEVER claim the candidate worked at the TARGET COMPANY. The target company is where they
+     are APPLYING TO, not where they worked.
+   - NEVER add companies, roles, projects, or technologies that are not in the original resume.
+   - If the resume says they worked at "CompanyA", you MUST keep "CompanyA" — do NOT replace it
+     with the target company name.
+   - You CAN rephrase existing skills/tasks using the JD's terminology. Rephrasing is not
+     fabrication. Example: "wrote scripts" → "developed automation scripts using Python" is OK
+     if the resume mentions both scripting and Python somewhere.
 3. **Mirror the JD's exact language** — if the JD says "CI/CD pipelines", replace "deployment
-   automation" with "CI/CD pipelines". Match their vocabulary precisely.
+   automation" with "CI/CD pipelines". Match their vocabulary precisely. This is the single
+   most impactful thing for ATS scores.
 4. **Rewrite bullet points to lead with relevance** — if a bullet mentions 3 things and only
    one is relevant to this job, restructure to lead with the relevant part.
 5. **The "original" string must be EXACT** — copy it character-for-character from the resume text.
 6. **Make 5-10 meaningful replacements minimum** — focus on:
-   - Professional summary / objective (rewrite entirely for this role)
-   - Top 3-5 most relevant experience bullets (rewrite to emphasize JD alignment)
-   - Skills section (reorder to put most relevant skills first)
-7. **Summary is most important** — always provide a completely rewritten summary that mentions
-   the target company name, role title, and 2-3 key JD requirements the candidate meets.
+   - Professional summary / objective (rewrite entirely for this role with top JD keywords)
+   - Top 3-5 most relevant experience bullets (rewrite to maximize keyword overlap with JD)
+   - Skills section (reorder to put JD-mentioned skills first, use JD's exact terminology)
+7. **Summary is the ONLY place to mention the target company** — write something like
+   "Seeking a {role} position at {company}" or "Experienced engineer eager to contribute to
+   {company}'s mission". Do NOT insert the target company name into experience bullet points.
 
 ## Output Format
 
@@ -92,26 +126,32 @@ Return ONLY a valid JSON object:
   "replacement_pairs": [
     {
       "original": "<EXACT text from the resume to find — must match character for character>",
-      "tailored": "<meaningfully rewritten version targeting this specific job>",
-      "section": "<experience|summary|skills|other>"
+      "tailored": "<ATS-optimized rewrite packed with JD keywords while staying truthful>",
+      "section": "<experience|summary|skills|other>",
+      "keywords_added": ["keyword1", "keyword2"]
     }
   ],
   "summary_replacement": {
     "original": "<exact current summary/objective text, if one exists>",
-    "tailored": "<completely rewritten 2-3 sentence summary mentioning the company name and role>"
+    "tailored": "<completely rewritten 2-3 sentence summary loaded with top JD keywords, mentioning company name and role>"
   },
   "skills_replacement": {
     "original": "<exact current skills line/section text>",
-    "tailored": "<reordered skills with JD-relevant skills first, using JD's exact terminology>"
+    "tailored": "<reordered skills using JD's exact terminology, JD-relevant skills first>"
   },
   "candidate_name": "<full name from resume>",
   "contact_info": "<email, phone, location, LinkedIn if found>",
-  "tailoring_notes": "<what you changed and why — be specific>"
+  "ats_keywords_targeted": ["list", "of", "key", "JD", "terms", "woven", "into", "resume"],
+  "tailoring_notes": "<what you changed and why — be specific about ATS strategy>"
 }
 
 IMPORTANT: Generate at least 5 replacement_pairs. Each tailored text should be noticeably
 different from the original — not just a single word change. If the job description is short,
 use the job title and company to infer what skills and experiences to emphasize.
+
+REMINDER: The candidate does NOT work at the target company. They are APPLYING there.
+Do NOT write bullet points that say they did work at the target company.
+Rephrasing existing experience using JD keywords is GOOD. Inventing new experience is BAD.
 """
 
 # ── PROMPT 3: Cover Letter ───────────────────────────────────────────────────
@@ -254,6 +294,8 @@ CRITICAL: This resume MUST be uniquely tailored for {job_title} at {job_company}
 - The summary MUST mention "{job_company}" by name and "{job_title}" as the target role.
 - Replacement pairs must reference specific requirements from THIS job description.
 - Do NOT produce generic replacements that could apply to any job.
+- NEVER claim the candidate worked at {job_company}. They are APPLYING to {job_company}.
+- Keep all original employer names exactly as they are. Only rephrase the bullet content.
 Tailor the resume for this specific role. Do NOT fabricate anything — only rephrase and reorder."""
 
     return _call_openai(api_key, TAILORED_RESUME_PROMPT, user_message, model)
