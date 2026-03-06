@@ -157,3 +157,77 @@ def get_stats(conn: sqlite3.Connection) -> dict:
     total = conn.execute("SELECT COUNT(*) FROM seen_jobs").fetchone()[0]
     matched = conn.execute("SELECT COUNT(*) FROM seen_jobs WHERE matched = 1").fetchone()[0]
     return {"total_seen": total, "total_matched": matched}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# METADATA TABLE — stores resume hash to detect changes between runs
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _ensure_metadata_table(conn: sqlite3.Connection):
+    """Create metadata table if it doesn't exist."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS metadata (
+            key   TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+    conn.commit()
+
+
+def get_metadata(conn: sqlite3.Connection, key: str) -> str | None:
+    """Get a metadata value by key."""
+    _ensure_metadata_table(conn)
+    row = conn.execute("SELECT value FROM metadata WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def set_metadata(conn: sqlite3.Connection, key: str, value: str):
+    """Set a metadata value (upsert)."""
+    _ensure_metadata_table(conn)
+    conn.execute(
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
+        (key, value),
+    )
+    conn.commit()
+
+
+def hash_resume(resume_text: str) -> str:
+    """Create a hash of the resume content to detect changes."""
+    return hashlib.sha256(resume_text.strip().encode()).hexdigest()[:16]
+
+
+def get_rescore_candidates(conn: sqlite3.Connection, threshold: int) -> list[dict]:
+    """
+    Get jobs that scored below threshold — candidates for rescoring
+    when resume changes.
+    """
+    rows = conn.execute(
+        """
+        SELECT job_hash, title, company, location, link, match_score
+        FROM seen_jobs
+        WHERE matched = 0 AND match_score > 0 AND match_score < ?
+        ORDER BY match_score DESC
+        """,
+        (threshold,),
+    ).fetchall()
+
+    return [
+        {
+            "job_hash": r[0],
+            "title": r[1],
+            "company": r[2],
+            "location": r[3],
+            "link": r[4],
+            "match_score": r[5],
+        }
+        for r in rows
+    ]
+
+
+def update_job_score(conn: sqlite3.Connection, job_hash: str, new_score: float, matched: bool):
+    """Update a job's score and matched status after rescoring."""
+    conn.execute(
+        "UPDATE seen_jobs SET match_score = ?, matched = ? WHERE job_hash = ?",
+        (new_score, int(matched), job_hash),
+    )
+    conn.commit()

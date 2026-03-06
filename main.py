@@ -24,7 +24,8 @@ from pathlib import Path
 
 import yaml
 
-from db import get_connection, make_hash, is_seen, is_duplicate, mark_seen, get_stats
+from db import (get_connection, make_hash, is_seen, is_duplicate, mark_seen, get_stats,
+                hash_resume, get_metadata, set_metadata, get_rescore_candidates, update_job_score)
 from scraper import scrape_jobs
 from matcher import match_resume_to_job, generate_tailored_resume, generate_cover_letter
 from doc_generator import create_tailored_resume, create_cover_letter
@@ -375,6 +376,78 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
     if db_stats['total_seen'] == 0:
         print(f"   ⚠️  Database is empty — this may be the first run or cache was not restored")
     print()
+
+    # ══════════════════════════════════════════════════════════════════════
+    # RESUME CHANGE DETECTION — auto-rescore if resume was updated
+    # ══════════════════════════════════════════════════════════════════════
+    current_resume_hash = hash_resume(resume_text)
+    stored_resume_hash = get_metadata(conn, "resume_hash")
+
+    if stored_resume_hash and stored_resume_hash != current_resume_hash and not dry_run:
+        print(f"🔄 Resume change detected! Rescoring previously rejected jobs...")
+        print(f"   Old hash: {stored_resume_hash} → New hash: {current_resume_hash}\n")
+
+        candidates = get_rescore_candidates(conn, threshold)
+        if candidates:
+            print(f"   Found {len(candidates)} jobs below threshold to rescore\n")
+            rescore_sent = 0
+            rescore_max = 10  # Cap rescore notifications per run
+
+            for idx, cand in enumerate(candidates, 1):
+                if rescore_sent >= rescore_max:
+                    print(f"\n   ✅ Rescore cap reached ({rescore_max} jobs sent) — stopping")
+                    break
+
+                print(f"   [{idx}/{len(candidates)}] Rescoring: {cand['title']} @ {cand['company']} (was {cand['match_score']:.0f})")
+
+                # Fetch description from job page for better scoring
+                description = ""
+                if cand["link"]:
+                    from scraper import _fetch_page_text
+                    description = _fetch_page_text(cand["link"], max_chars=4000)
+
+                match_result = match_resume_to_job(
+                    api_key=openai_key,
+                    resume_text=resume_text,
+                    job_title=cand["title"],
+                    job_company=cand["company"],
+                    job_description=description or f"{cand['title']} at {cand['company']}",
+                    model=openai_model,
+                )
+
+                new_score = match_result.get("score", 0)
+                reasoning = match_result.get("reasoning", "")
+                key_matches = match_result.get("key_matches", [])
+                key_gaps = match_result.get("key_gaps", [])
+
+                is_match = new_score >= threshold
+                update_job_score(conn, cand["job_hash"], new_score, is_match)
+
+                print(f"       New score: {new_score}/100 (was {cand['match_score']:.0f}) {'✅ NOW MATCHES!' if is_match else '❌ Still below'}")
+
+                if is_match:
+                    stats["matched_sent"] += 1
+                    rescore_sent += 1
+
+                    # Send to Telegram
+                    full_reasoning = f"🔄 RESCORED (resume updated)\n{reasoning}"
+                    send_job_message(
+                        bot_token=bot_token, chat_id=chat_id,
+                        title=cand["title"], company=cand["company"],
+                        location=cand["location"], link=cand["link"],
+                        score=new_score, reasoning=full_reasoning,
+                        key_matches=key_matches, key_gaps=key_gaps,
+                    )
+                    print(f"       📨 Sent to Telegram!")
+
+            print(f"\n   🔄 Rescore complete: {rescore_sent} newly matched jobs sent")
+        else:
+            print(f"   No below-threshold jobs to rescore")
+    elif not stored_resume_hash:
+        print(f"📄 First run with this resume — storing hash for future change detection")
+
+    # Always update the stored resume hash
+    set_metadata(conn, "resume_hash", current_resume_hash)
 
     # Create a temp dir for generated documents
     with tempfile.TemporaryDirectory(prefix="jobscout_") as tmp_dir:
