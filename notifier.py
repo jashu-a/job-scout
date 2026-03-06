@@ -104,3 +104,40 @@ def send_summary_message(
     except requests.RequestException as e:
         print(f"  [ERROR] Telegram summary failed: {e}")
         return False
+
+
+def send_error_message(
+    bot_token: str,
+    chat_id: str,
+    error_type: str,
+    error_detail: str,
+    possible_cause: str = "",
+) -> bool:
+    """Send an error/warning notification to Telegram."""
+
+    message = (
+        f"⚠️ <b>Job Scout Error</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"❌ <b>{error_type}</b>\n"
+        f"📝 {error_detail}\n"
+    )
+
+    if possible_cause:
+        message += f"\n💡 <b>Possible cause:</b> {possible_cause}\n"
+
+    message += f"━━━━━━━━━━━━━━━━━━━"
+
+    url = TELEGRAM_API.format(token=bot_token)
+    payload = {
+        "chat_id": chat_id,
+        "text": message,
+        "parse_mode": "HTML",
+    }
+
+    try:
+        resp = requests.post(url, json=payload, timeout=15)
+        resp.raise_for_status()
+        return True
+    except requests.RequestException as e:
+        print(f"  [ERROR] Telegram error notification failed: {e}")
+        return False

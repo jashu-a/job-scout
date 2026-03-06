@@ -29,7 +29,7 @@ from scraper import scrape_jobs
 from matcher import match_resume_to_job, generate_tailored_resume, generate_cover_letter
 from doc_generator import create_tailored_resume, create_cover_letter
 from drive_uploader import upload_to_drive, download_db, upload_db
-from notifier import send_job_message, send_summary_message
+from notifier import send_job_message, send_summary_message, send_error_message
 from resume_parser import extract_resume_text
 import os
 
@@ -282,6 +282,7 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
     sources = cfg.get("sources", ["google_jobs", "linkedin", "tokyodev", "indeed"])
     max_sends = cfg.get("max_telegram_sends", 50)
     min_matches_per_run = cfg.get("min_matches_per_run", 10)
+    expansion_max_sends = 10  # Hard cap: max 10 new jobs from expansion per run
 
     # Related titles for auto-expansion when results are low
     TITLE_EXPANSIONS = {
@@ -433,7 +434,10 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
     if stats["matched_sent"] < min_matches_per_run and not dry_run:
         print(f"\n{'='*60}")
         print(f"📈 EXPANSION PASS — only {stats['matched_sent']} matches so far (target: {min_matches_per_run})")
+        print(f"   Max {expansion_max_sends} new jobs from expansion")
         print(f"{'='*60}")
+
+        expansion_sent = 0  # Track expansion sends separately
 
         already_searched = {c["title"].lower() for c in combos}
         expansion_combos = []
@@ -468,8 +472,8 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
                 print(f"\n   🔄 Phase 1: Trying {len(expansion_combos)} new title variations\n")
 
                 for i, combo in enumerate(expansion_combos, 1):
-                    if stats["matched_sent"] >= min_matches_per_run:
-                        print(f"\n   ✅ Reached {min_matches_per_run} matches — stopping expansion")
+                    if expansion_sent >= expansion_max_sends:
+                        print(f"\n   ✅ Expansion cap reached ({expansion_max_sends} jobs sent) — stopping")
                         break
 
                     title = combo["title"]
@@ -493,6 +497,9 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
                     print(f"   Found {len(jobs)} jobs\n")
 
                     for j, job in enumerate(jobs, 1):
+                        if expansion_sent >= expansion_max_sends:
+                            break
+
                         job_hash = make_hash(job["title"], job["company"], job["location"])
                         if is_duplicate(conn, job_hash, job.get("link", "")):
                             stats["skipped_dupes"] += 1
@@ -503,21 +510,23 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
                         print(f"   [{j}] 🆕 NEW: {job['title']} @ {job['company']} [{job.get('source', '?')}]")
                         print(f"       📄 Description: {len(job.get('description', ''))} chars")
 
-                        _process_new_job(
+                        sent = _process_new_job(
                             job=job, conn=conn, resume_text=resume_text, resume_path=resume_path,
                             openai_key=openai_key, openai_model=openai_model, threshold=threshold,
                             generate_docs=generate_docs, gdrive_enabled=gdrive_enabled,
                             gdrive_folder_id=gdrive_folder_id, bot_token=bot_token, chat_id=chat_id,
                             dry_run=dry_run, tmp_dir=tmp_dir, stats=stats,
                         )
+                        if sent:
+                            expansion_sent += 1
 
             # Phase 2: Wider date range, SerpAPI sources only
-            if stats["matched_sent"] < min_matches_per_run and wider_date_combos and serpapi_only_sources:
+            if expansion_sent < expansion_max_sends and wider_date_combos and serpapi_only_sources:
                 print(f"\n   🔄 Phase 2: Retrying original titles with days_back=14 (SerpAPI sources only)\n")
 
                 for i, combo in enumerate(wider_date_combos, 1):
-                    if stats["matched_sent"] >= min_matches_per_run:
-                        print(f"\n   ✅ Reached {min_matches_per_run} matches — stopping expansion")
+                    if expansion_sent >= expansion_max_sends:
+                        print(f"\n   ✅ Expansion cap reached ({expansion_max_sends} jobs sent) — stopping")
                         break
 
                     title = combo["title"]
@@ -542,6 +551,9 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
                     print(f"   Found {len(jobs)} jobs\n")
 
                     for j, job in enumerate(jobs, 1):
+                        if expansion_sent >= expansion_max_sends:
+                            break
+
                         job_hash = make_hash(job["title"], job["company"], job["location"])
                         if is_duplicate(conn, job_hash, job.get("link", "")):
                             stats["skipped_dupes"] += 1
@@ -552,13 +564,15 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
                         print(f"   [{j}] 🆕 NEW: {job['title']} @ {job['company']} [{job.get('source', '?')}]")
                         print(f"       📄 Description: {len(job.get('description', ''))} chars")
 
-                        _process_new_job(
+                        sent = _process_new_job(
                             job=job, conn=conn, resume_text=resume_text, resume_path=resume_path,
                             openai_key=openai_key, openai_model=openai_model, threshold=threshold,
                             generate_docs=generate_docs, gdrive_enabled=gdrive_enabled,
                             gdrive_folder_id=gdrive_folder_id, bot_token=bot_token, chat_id=chat_id,
                             dry_run=dry_run, tmp_dir=tmp_dir, stats=stats,
                         )
+                        if sent:
+                            expansion_sent += 1
 
     # Summary
     print(f"\n{'='*60}")
@@ -615,8 +629,54 @@ def main():
     print(f"⚙️  Settings: days_back={cfg['days_back']}, threshold={cfg['match_threshold']}, "
           f"combos={len(cfg['search_combos'])}")
 
+    bot_token = cfg.get("telegram_bot_token", "")
+    chat_id = str(cfg.get("telegram_chat_id", ""))
+
     start = time.time()
-    run_pipeline(cfg, dry_run=args.dry_run, skip_drive=args.no_drive, skip_docs=args.no_docs)
+    try:
+        run_pipeline(cfg, dry_run=args.dry_run, skip_drive=args.no_drive, skip_docs=args.no_docs)
+    except Exception as e:
+        error_type = type(e).__name__
+        error_detail = str(e)[:500]
+
+        # Map common errors to user-friendly causes
+        cause_map = {
+            "invalid_grant": "Google Drive OAuth token expired. Regenerate refresh token and update GDRIVE_REFRESH_TOKEN secret.",
+            "quota": "API quota exceeded. Check SerpAPI or OpenAI usage limits.",
+            "rate_limit": "API rate limit hit. The run may have sent too many requests too quickly.",
+            "timeout": "A request timed out. A job source may be unreachable.",
+            "SSLError": "SSL certificate error. Likely a network/proxy issue.",
+            "AuthenticationError": "OpenAI API key invalid or expired. Update OPENAI_API_KEY secret.",
+            "Unauthorized": "API authentication failed. Check your API keys in GitHub Secrets.",
+            "OperationalError": "Database error. The jobs.db file may be corrupted. Delete it from Google Drive to reset.",
+        }
+
+        possible_cause = ""
+        for key, cause in cause_map.items():
+            if key.lower() in error_detail.lower() or key.lower() in error_type.lower():
+                possible_cause = cause
+                break
+
+        print(f"\n❌ PIPELINE ERROR: {error_type}: {error_detail}")
+        if possible_cause:
+            print(f"   💡 Possible cause: {possible_cause}")
+
+        # Send error to Telegram (best-effort, don't crash if this also fails)
+        if bot_token and chat_id:
+            try:
+                send_error_message(
+                    bot_token=bot_token,
+                    chat_id=chat_id,
+                    error_type=error_type,
+                    error_detail=error_detail,
+                    possible_cause=possible_cause,
+                )
+            except Exception:
+                print("   ⚠️  Could not send error notification to Telegram")
+
+        # Re-raise so GitHub Actions marks the run as failed
+        raise
+
     elapsed = time.time() - start
     print(f"⏱️  Completed in {elapsed:.1f}s")
 
