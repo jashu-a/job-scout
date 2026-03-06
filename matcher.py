@@ -151,7 +151,7 @@ use the job title and company to infer what skills and experiences to emphasize.
 
 REMINDER: The candidate does NOT work at the target company. They are APPLYING there.
 Do NOT write bullet points that say they did work at the target company.
-Rephrasing existing experience using JD keywords is GOOD. Inventing new experience is BAD.
+Rephrasing existing experience using Job Description keywords is GOOD. Inventing new experience is BAD.
 """
 
 # ── PROMPT 3: Cover Letter ───────────────────────────────────────────────────
