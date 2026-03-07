@@ -1,2 +1,3 @@
 # Keep user_config.yaml untouched during merges from upstream
 user_config.yaml merge=ours
+.github/workflows/scout.yml merge=ours
