@@ -196,19 +196,21 @@ def hash_resume(resume_text: str) -> str:
     return hashlib.sha256(resume_text.strip().encode()).hexdigest()[:16]
 
 
-def get_rescore_candidates(conn: sqlite3.Connection, threshold: int) -> list[dict]:
+def get_rescore_candidates(conn: sqlite3.Connection, threshold: int, max_age_days: int = 30) -> list[dict]:
     """
     Get jobs that scored below threshold — candidates for rescoring
-    when resume changes.
+    when resume changes. Ignores jobs older than max_age_days since
+    those postings are likely removed.
     """
     rows = conn.execute(
         """
-        SELECT job_hash, title, company, location, link, match_score
+        SELECT job_hash, title, company, location, link, match_score, created_at
         FROM seen_jobs
         WHERE matched = 0 AND match_score > 0 AND match_score < ?
+          AND created_at >= datetime('now', ?)
         ORDER BY match_score DESC
         """,
-        (threshold,),
+        (threshold, f"-{max_age_days} days"),
     ).fetchall()
 
     return [
