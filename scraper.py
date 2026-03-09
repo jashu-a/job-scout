@@ -235,7 +235,7 @@ def normalize_location(raw_location: str) -> tuple[str, str]:
 
 def scrape_google_jobs(
     api_key: str, title: str, location: str,
-    seniority: str = "", days_back: int = 7, max_results: int = 10,
+    seniority: str = "", days_back: int = 7, max_results: int = 50,
     is_seen_fn: Optional[Callable] = None,
 ) -> list[dict]:
     query = f"{seniority} {title}".strip() if seniority else title
@@ -259,7 +259,10 @@ def scrape_google_jobs(
 
     all_jobs = []
     next_page_token = None
-    max_pages = (max_results + 9) // 10
+    # Google Jobs returns 10 per page with NO way to increase it.
+    # Each page = 1 SerpAPI credit. Cap at 2 pages (20 results) to preserve budget.
+    # LinkedIn/Indeed use Google Search engine which returns 100 per credit.
+    max_pages = min((max_results + 9) // 10, 2)
 
     for page_num in range(max_pages):
         if next_page_token:
@@ -305,7 +308,7 @@ def scrape_google_jobs(
         if not next_page_token:
             break
 
-    return all_jobs[:max_results]
+    return all_jobs
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -314,7 +317,7 @@ def scrape_google_jobs(
 # For other regions: SerpAPI Google Search
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _scrape_linkedin_direct(title: str, location: str, max_results: int = 15) -> list[dict]:
+def _scrape_linkedin_direct(title: str, location: str, max_results: int = 50) -> list[dict]:
     """Scrape LinkedIn job search directly (no SerpAPI needed)."""
     jobs = []
     query = quote_plus(f"{title}")
@@ -377,7 +380,7 @@ def _scrape_linkedin_direct(title: str, location: str, max_results: int = 15) ->
 
 def _scrape_linkedin_via_serpapi(
     api_key: str, title: str, location: str,
-    seniority: str = "", days_back: int = 7, max_results: int = 10,
+    seniority: str = "", days_back: int = 7, max_results: int = 50,
 ) -> list[dict]:
     """Scrape LinkedIn via SerpAPI Google Search."""
     norm_location, _ = normalize_location(location)
@@ -442,7 +445,7 @@ def _scrape_linkedin_via_serpapi(
 # SOURCE 3: TokyoDev (direct scrape — Japan only)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def scrape_tokyodev(title: str, max_results: int = 20) -> list[dict]:
+def scrape_tokyodev(title: str, max_results: int = 50) -> list[dict]:
     """Scrape TokyoDev job listings."""
     url = "https://www.tokyodev.com/jobs"
     jobs = []
@@ -510,7 +513,7 @@ def scrape_tokyodev(title: str, max_results: int = 20) -> list[dict]:
 # For other regions: SerpAPI Google Search
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _scrape_indeed_direct(title: str, location: str, max_results: int = 15) -> list[dict]:
+def _scrape_indeed_direct(title: str, location: str, max_results: int = 50) -> list[dict]:
     """Scrape Indeed Japan directly (no SerpAPI)."""
     jobs = []
 
@@ -576,7 +579,7 @@ def _scrape_indeed_direct(title: str, location: str, max_results: int = 15) -> l
 
 def _scrape_indeed_via_serpapi(
     api_key: str, title: str, location: str,
-    seniority: str = "", days_back: int = 7, max_results: int = 10,
+    seniority: str = "", days_back: int = 7, max_results: int = 50,
 ) -> list[dict]:
     """Scrape Indeed via SerpAPI Google Search."""
     norm_location, _ = normalize_location(location)
@@ -641,7 +644,7 @@ def _scrape_indeed_via_serpapi(
 # SOURCE 5: JapanDev (direct scrape — server-rendered HTML)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def scrape_japandev(title: str, max_results: int = 20) -> list[dict]:
+def scrape_japandev(title: str, max_results: int = 50) -> list[dict]:
     """Scrape JapanDev job listings — 283+ curated English tech jobs in Japan."""
     url = "https://japan-dev.com/jobs"
     jobs = []
@@ -717,7 +720,7 @@ def scrape_japandev(title: str, max_results: int = 20) -> list[dict]:
 # SOURCE 6: GaijinPot (direct scrape — may fail from some IPs)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def scrape_gaijinpot(title: str, max_results: int = 15) -> list[dict]:
+def scrape_gaijinpot(title: str, max_results: int = 50) -> list[dict]:
     """Scrape GaijinPot IT jobs. May fail from GitHub Actions IPs."""
     url = f"https://jobs.gaijinpot.com/en/job?category=22&keywords={quote_plus(title)}"
     jobs = []
@@ -772,7 +775,7 @@ def scrape_jobs(
     location: str,
     seniority: str = "",
     days_back: int = 7,
-    max_results: int = 30,
+    max_results: int = 100,
     is_seen_fn: Optional[Callable] = None,
     sources: Optional[list[str]] = None,
 ) -> list[dict]:
@@ -793,9 +796,8 @@ def scrape_jobs(
     japan_search = _is_japan_search(location)
     region_key = location.strip().lower()
 
-    # Per-source limits — generous to find plenty of new jobs
-    active_count = max(len(sources) - 1, 1)
-    per_source_limit = max(max_results // active_count, 10)
+    # Per-source limit — use max_results for each source to maximize coverage
+    per_source_limit = max_results
 
     # ── Google Jobs ──
     if "google_jobs" in sources:
@@ -857,4 +859,4 @@ def scrape_jobs(
             all_jobs.extend(ind)
 
     print(f"  📊 Total from all sources: {len(all_jobs)}")
-    return all_jobs[:max_results]
+    return all_jobs

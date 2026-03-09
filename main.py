@@ -278,7 +278,7 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
     chat_id = str(cfg["telegram_chat_id"])
     days_back = cfg.get("days_back", 7)
     threshold = cfg.get("match_threshold", 65)
-    max_results = cfg.get("max_results_per_combo", 30)
+    max_results = cfg.get("max_results_per_combo", 100)
     combos = cfg.get("search_combos", [])
     sources = cfg.get("sources", ["google_jobs", "linkedin", "tokyodev", "indeed"])
     max_sends = cfg.get("max_telegram_sends", 50)

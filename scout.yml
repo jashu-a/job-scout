@@ -7,9 +7,9 @@ on:
       days_back:
         description: 'Jobs posted within last N days'
         required: false
-        default: '3'
+        default: '5'
         type: choice
-        options: ['1', '3', '7', '14', '30']
+        options: ['1', '3', '5', '7', '14', '30']
       threshold:
         description: 'Minimum match score (0-100)'
         required: false
@@ -57,25 +57,35 @@ jobs:
         run: |
           python3 -c "
           import yaml, os
+
+          # Load user-specific config (search combos, sources, thresholds)
+          user_cfg = {}
+          if os.path.exists('user_config.yaml'):
+              with open('user_config.yaml') as f:
+                  user_cfg = yaml.safe_load(f) or {}
+              print('✅ Loaded user_config.yaml')
+          else:
+              print('⚠️  No user_config.yaml found — using defaults')
+
+          # Merge: secrets (from GitHub) + user preferences (from file)
           config = {
               'serpapi_key': os.environ['SERPAPI_KEY'],
               'openai_api_key': os.environ['OPENAI_API_KEY'],
               'telegram_bot_token': os.environ['TELEGRAM_BOT_TOKEN'],
               'telegram_chat_id': os.environ['TELEGRAM_CHAT_ID'],
               'resume_path': 'resume.docx',
-              'search_combos': [
+              'search_combos': user_cfg.get('search_combos', [
                   {'title': 'Software Engineer', 'location': 'Tokyo, Japan', 'seniority': 'Mid level'},
-                  {'title': 'Backend Developer', 'location': 'Tokyo, Japan', 'seniority': 'Mid level'},
-                  {'title': 'Platform Engineer', 'location': 'Tokyo, Japan', 'seniority': 'Mid level'},
-              ],
-              'sources': ['linkedin', 'tokyodev', 'japandev', 'gaijinpot', 'indeed', 'google_jobs'],
-              'days_back': 3,
-              'match_threshold': 65,
-              'max_results_per_combo': 50,
-              'max_telegram_sends': 50,
-              'openai_model': 'gpt-4o-mini',
-              'gdrive_enabled': True,
+              ]),
+              'sources': user_cfg.get('sources', ['linkedin', 'tokyodev', 'japandev', 'gaijinpot', 'indeed', 'google_jobs']),
+              'days_back': user_cfg.get('days_back', 5),
+              'match_threshold': user_cfg.get('match_threshold', 65),
+              'max_results_per_combo': user_cfg.get('max_results_per_combo', 50),
+              'max_telegram_sends': user_cfg.get('max_telegram_sends', 50),
+              'openai_model': user_cfg.get('openai_model', 'gpt-4o-mini'),
+              'gdrive_enabled': user_cfg.get('gdrive_enabled', True),
               'gdrive_folder_id': os.environ['GDRIVE_FOLDER_ID'],
+              'db_name': user_cfg.get('db_name', 'jobs.db'),
           }
           with open('config.yaml', 'w') as f:
               yaml.dump(config, f, default_flow_style=False)
