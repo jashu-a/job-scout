@@ -326,9 +326,9 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
         "cloud security engineer": ["Security Engineer", "DevSecOps Engineer", "Cloud Security Architect"],
         "devsecops engineer": ["DevOps Engineer", "Security Engineer", "Cloud Security Engineer"],
         # Project / Product Management
-        "project manager": ["Program Manager", "Technical Project Manager", "Scrum Master", "Delivery Manager"],
-        "program manager": ["Project Manager", "Technical Program Manager", "Portfolio Manager"],
-        "technical project manager": ["Project Manager", "Engineering Manager", "Scrum Master"],
+        "project manager": ["Program Manager", "Technical Project Manager", "Scrum Master", "Delivery Manager", "CRM Project Manager"],
+        "program manager": ["Project Manager", "Technical Program Manager", "Portfolio Manager", "Business Analyst"],
+        "technical project manager": ["Project Manager", "Engineering Manager", "Scrum Master", "IT Project Manager"],
         "product manager": ["Product Owner", "Technical Product Manager", "Program Manager"],
         "product owner": ["Product Manager", "Scrum Master", "Business Analyst"],
         "scrum master": ["Agile Coach", "Project Manager", "Delivery Manager"],
