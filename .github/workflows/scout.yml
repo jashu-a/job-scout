@@ -64,52 +64,6 @@ jobs:
         env:
           RESUME_BASE64: ${{ secrets.RESUME_BASE64 }}
 
-      - name: Upload resume to Drive (if from secret, makes it visible to app)
-        if: ${{ secrets.RESUME_BASE64 != '' }}
-        env:
-          GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
-          GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
-          GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
-          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
-        run: |
-          python3 -c "
-          import os, yaml
-          user_cfg = {}
-          if os.path.exists('user_config.yaml'):
-              with open('user_config.yaml') as f:
-                  user_cfg = yaml.safe_load(f) or {}
-          resume_drive_name = user_cfg.get('resume_drive_name', '')
-          if not resume_drive_name:
-              print('No resume_drive_name in config — skipping upload')
-              exit(0)
-          # Find local resume
-          import glob
-          local = glob.glob('resume.*')
-          if not local:
-              print('No local resume file found')
-              exit(0)
-          local_path = local[0]
-          print(f'Uploading {local_path} as {resume_drive_name} to Drive...')
-          from drive_uploader import _get_service, _find_db_file
-          from googleapiclient.http import MediaFileUpload
-          from pathlib import Path
-          service = _get_service()
-          folder_id = os.environ['GDRIVE_FOLDER_ID']
-          # Check if file already exists (uploaded by app previously)
-          file_id = _find_db_file(service, folder_id, filename=resume_drive_name)
-          ext = Path(local_path).suffix.lower()
-          mimetype = 'application/pdf' if ext == '.pdf' else 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-          media = MediaFileUpload(local_path, mimetype=mimetype)
-          if file_id:
-              service.files().update(fileId=file_id, media_body=media).execute()
-              print(f'✅ Updated {resume_drive_name} in Drive')
-          else:
-              file_meta = {'name': resume_drive_name, 'parents': [folder_id]}
-              service.files().create(body=file_meta, media_body=media, fields='id').execute()
-              print(f'✅ Uploaded {resume_drive_name} to Drive (now visible to app)')
-          "
-        continue-on-error: true
-
       - name: Generate config.yaml
         env:
           SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
