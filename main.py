@@ -104,16 +104,14 @@ def _make_job_id(job: dict) -> str:
 
 
 def _docx_to_pdf(docx_path: str, pdf_path: str) -> bool:
-    """Convert a .docx file to .pdf using python-docx2pdf or LibreOffice."""
+    """Convert a .docx file to .pdf using LibreOffice."""
     try:
         import subprocess
-        # Use LibreOffice for reliable conversion (available on GitHub Actions ubuntu)
         result = subprocess.run(
             ["libreoffice", "--headless", "--convert-to", "pdf", "--outdir",
              str(Path(pdf_path).parent), docx_path],
             capture_output=True, timeout=60,
         )
-        # LibreOffice outputs to same dir with .pdf extension
         expected = Path(docx_path).with_suffix(".pdf")
         if expected.exists():
             if str(expected) != pdf_path:
@@ -122,6 +120,27 @@ def _docx_to_pdf(docx_path: str, pdf_path: str) -> bool:
         return False
     except Exception as e:
         print(f"       ⚠️  PDF conversion failed: {e}")
+        return False
+
+
+def _pdf_to_docx(pdf_path: str, docx_path: str) -> bool:
+    """Convert a PDF to DOCX using LibreOffice (preserves layout/fonts)."""
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["libreoffice", "--headless", "--infilter=writer_pdf_import",
+             "--convert-to", "docx", "--outdir",
+             str(Path(docx_path).parent), pdf_path],
+            capture_output=True, timeout=60,
+        )
+        expected = Path(pdf_path).with_suffix(".docx")
+        if expected.exists():
+            if str(expected) != docx_path:
+                expected.rename(docx_path)
+            return True
+        return False
+    except Exception as e:
+        print(f"       ⚠️  PDF→DOCX conversion failed: {e}")
         return False
 
 
@@ -213,10 +232,21 @@ def _process_new_job(
             is_pdf_resume = resume_path.lower().endswith(".pdf")
 
             if is_pdf_resume:
-                # PDF resume: can't use as DOCX template, create fresh DOCX from AI output
-                # doc_generator will handle creating a new document from scratch
+                # PDF resume: convert to DOCX first to preserve original formatting
+                template_docx = str(Path(tmp_dir) / "resume_template.docx")
+                if _pdf_to_docx(resume_path, template_docx):
+                    print(f"       📄 Converted PDF to DOCX template (preserving layout)")
+                else:
+                    # Fallback: create a basic DOCX from resume text
+                    print(f"       ⚠️  PDF→DOCX conversion not available, creating basic template")
+                    from docx import Document as DocxDocument
+                    doc = DocxDocument()
+                    for line in resume_text.split('\n'):
+                        doc.add_paragraph(line)
+                    doc.save(template_docx)
+
                 create_tailored_resume(
-                    original_docx_path=None,
+                    original_docx_path=template_docx,
                     resume_data=resume_data,
                     job_title=job["title"],
                     job_company=job["company"],
@@ -354,7 +384,10 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
     print(f"📄 Loading resume: {resume_path}")
     resume_text = extract_resume_text(resume_path)
     print(f"   Extracted {len(resume_text)} characters from resume.")
-    print(f"   Original DOCX will be used as template for tailored versions.\n")
+    if resume_path.lower().endswith(".pdf"):
+        print(f"   PDF resume — tailored versions will be generated as fresh documents.\n")
+    else:
+        print(f"   DOCX resume — will be used as template for tailored versions.\n")
 
     # Config values
     serpapi_key = cfg["serpapi_key"]
