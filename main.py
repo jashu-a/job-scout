@@ -63,8 +63,9 @@ def validate_config(cfg: dict, skip_drive: bool = False):
         errors.append("  - No search_combos defined in config.yaml")
 
     resume_path = cfg.get("resume_path", "resume.pdf")
-    if not Path(resume_path).exists():
-        errors.append(f"  - Resume file not found: {resume_path}")
+    resume_drive_name = cfg.get("resume_drive_name", "")
+    if not Path(resume_path).exists() and not resume_drive_name:
+        errors.append(f"  - Resume file not found: {resume_path} (and no resume_drive_name configured)")
 
     # Google Drive validation (optional)
     if not skip_drive and cfg.get("gdrive_enabled", False):
