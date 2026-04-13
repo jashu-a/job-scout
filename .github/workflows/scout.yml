@@ -45,18 +45,21 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq libreoffice-writer > /dev/null 2>&1
           echo "✅ LibreOffice installed for PDF conversion"
 
-      - name: Decode resume
+      - name: Decode resume (if provided via secret)
         run: |
-          echo "$RESUME_BASE64" | base64 -d > resume_raw
-          # Auto-detect format by file magic bytes
-          FILE_TYPE=$(file -b --mime-type resume_raw)
-          echo "Detected file type: $FILE_TYPE"
-          if echo "$FILE_TYPE" | grep -q "pdf"; then
-            mv resume_raw resume.pdf
-            echo "📄 Resume is PDF"
+          if [ -z "$RESUME_BASE64" ]; then
+            echo "📄 No RESUME_BASE64 secret — will download resume from Google Drive"
           else
-            mv resume_raw resume.docx
-            echo "📄 Resume is DOCX"
+            echo "$RESUME_BASE64" | base64 -d > resume_raw
+            FILE_TYPE=$(file -b --mime-type resume_raw)
+            echo "Detected file type: $FILE_TYPE"
+            if echo "$FILE_TYPE" | grep -q "pdf"; then
+              mv resume_raw resume.pdf
+              echo "📄 Resume is PDF (from secret)"
+            else
+              mv resume_raw resume.docx
+              echo "📄 Resume is DOCX (from secret)"
+            fi
           fi
         env:
           RESUME_BASE64: ${{ secrets.RESUME_BASE64 }}
@@ -100,6 +103,7 @@ jobs:
               'gdrive_enabled': user_cfg.get('gdrive_enabled', True),
               'gdrive_folder_id': os.environ['GDRIVE_FOLDER_ID'],
               'db_name': user_cfg.get('db_name', 'jobs.db'),
+              'resume_drive_name': user_cfg.get('resume_drive_name', ''),
           }
           with open('config.yaml', 'w') as f:
               yaml.dump(config, f, default_flow_style=False)

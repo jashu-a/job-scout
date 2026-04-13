@@ -159,13 +159,43 @@ def upload_to_drive(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _find_db_file(service, folder_id: str, filename: str = "jobs.db") -> str | None:
-    """Find the jobs.db file in the Drive folder. Returns file ID or None."""
+    """Find a file by name in the Drive folder. Returns file ID or None."""
     query = f"name = '{filename}' and '{folder_id}' in parents and trashed = false"
     results = service.files().list(q=query, fields="files(id, name, modifiedTime)").execute()
     files = results.get("files", [])
     if files:
         return files[0]["id"]
     return None
+
+
+def download_file(folder_id: str, remote_name: str, local_path: str) -> bool:
+    """Download any file from Google Drive folder. Returns True if found."""
+    try:
+        service = _get_service()
+        file_id = _find_db_file(service, folder_id, filename=remote_name)
+
+        if not file_id:
+            print(f"  📦 No '{remote_name}' found in Drive")
+            return False
+
+        request = service.files().get_media(fileId=file_id)
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+
+        with open(local_path, "wb") as f:
+            f.write(fh.getvalue())
+
+        size = Path(local_path).stat().st_size
+        print(f"  📄 Downloaded {remote_name} from Drive ({size:,} bytes)")
+        return True
+
+    except Exception as e:
+        print(f"  ⚠️  Failed to download {remote_name}: {e}")
+        return False
 
 
 def download_db(folder_id: str, local_path: str = "jobs.db", remote_name: str = "jobs.db") -> bool:

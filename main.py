@@ -30,7 +30,7 @@ from db import (get_connection, make_hash, is_seen, is_duplicate, mark_seen, get
 from scraper import scrape_jobs, is_job_still_active
 from matcher import match_resume_to_job, generate_tailored_resume, generate_cover_letter
 from doc_generator import create_tailored_resume, create_cover_letter
-from drive_uploader import upload_to_drive, download_db, upload_db
+from drive_uploader import upload_to_drive, download_db, upload_db, download_file
 from notifier import send_job_message, send_summary_message, send_error_message
 from resume_parser import extract_resume_text
 import os
@@ -335,7 +335,23 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
 
     # Extract resume text
     resume_path = cfg.get("resume_path", "resume.docx")
-    print(f"\n📄 Loading resume: {resume_path}")
+    resume_drive_name = cfg.get("resume_drive_name", "")
+    gdrive_folder_id = cfg.get("gdrive_folder_id", "")
+    gdrive_enabled = cfg.get("gdrive_enabled", False) and not skip_drive and not skip_docs
+
+    # Try to download resume from Google Drive first (supports large files, any format)
+    if gdrive_enabled and resume_drive_name and gdrive_folder_id:
+        print(f"\n📄 Downloading resume from Google Drive: {resume_drive_name}")
+        # Determine local path from the Drive filename extension
+        ext = Path(resume_drive_name).suffix or ".docx"
+        resume_path = f"resume{ext}"
+        if download_file(gdrive_folder_id, resume_drive_name, resume_path):
+            cfg["resume_path"] = resume_path
+        else:
+            print(f"   ⚠️  Drive download failed, falling back to local: {cfg.get('resume_path', resume_path)}")
+            resume_path = cfg.get("resume_path", "resume.docx")
+
+    print(f"📄 Loading resume: {resume_path}")
     resume_text = extract_resume_text(resume_path)
     print(f"   Extracted {len(resume_text)} characters from resume.")
     print(f"   Original DOCX will be used as template for tailored versions.\n")
@@ -406,10 +422,7 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
         "technical program manager": ["Program Manager", "Engineering Manager", "Technical Project Manager"],
     }
 
-    # Google Drive config
-    gdrive_enabled = cfg.get("gdrive_enabled", False) and not skip_drive and not skip_docs
-    gdrive_creds = cfg.get("gdrive_credentials_path", "")
-    gdrive_folder_id = cfg.get("gdrive_folder_id", "")
+    # Google Drive — DB persistence
     db_remote_name = cfg.get("db_name", "jobs.db")
 
     if gdrive_enabled:

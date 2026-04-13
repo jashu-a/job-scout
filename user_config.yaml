@@ -31,7 +31,8 @@ sources:
   - google_jobs
 
 days_back: 5
-match_threshold: 65
-max_results_per_combo: 50
+match_threshold: 75
+max_results_per_combo: 70
 openai_model: "gpt-4o-mini"
 db_name: "jobs.db"
+resume_drive_name: "Resume_Jaswanth.pdf"
