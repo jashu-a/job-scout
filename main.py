@@ -26,7 +26,7 @@ import yaml
 
 from db import (get_connection, make_hash, is_seen, is_duplicate, mark_seen, get_stats,
                 hash_resume, get_metadata, set_metadata, get_rescore_candidates, update_job_score)
-from scraper import scrape_jobs
+from scraper import scrape_jobs, is_job_still_active
 from matcher import match_resume_to_job, generate_tailored_resume, generate_cover_letter
 from doc_generator import create_tailored_resume, create_cover_letter
 from drive_uploader import upload_to_drive, download_db, upload_db
@@ -114,6 +114,14 @@ def _process_new_job(
     Updates stats dict in-place. Returns True if job was matched and sent.
     """
     job_hash = make_hash(job["title"], job["company"], job["location"])
+
+    # Check if the job posting is still active before spending OpenAI credits
+    is_active, closed_reason = is_job_still_active(job.get("link", ""))
+    if not is_active:
+        print(f"       ⛔ Job no longer active: {closed_reason}")
+        mark_seen(conn, job_hash, job["title"], job["company"], job.get("location", ""),
+                   job.get("link", ""), 0, False)
+        return False
 
     # AI Matching
     print(f"       🤖 Scoring match...")
@@ -277,7 +285,7 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
     bot_token = cfg["telegram_bot_token"]
     chat_id = str(cfg["telegram_chat_id"])
     days_back = cfg.get("days_back", 7)
-    threshold = cfg.get("match_threshold", 65)
+    threshold = cfg.get("match_threshold", 75)
     max_results = cfg.get("max_results_per_combo", 100)
     combos = cfg.get("search_combos", [])
     sources = cfg.get("sources", ["google_jobs", "linkedin", "tokyodev", "indeed"])
@@ -326,9 +334,9 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
         "cloud security engineer": ["Security Engineer", "DevSecOps Engineer", "Cloud Security Architect"],
         "devsecops engineer": ["DevOps Engineer", "Security Engineer", "Cloud Security Engineer"],
         # Project / Product Management
-        "project manager": ["Program Manager", "Technical Project Manager", "Scrum Master", "Delivery Manager", "CRM Project Manager"],
-        "program manager": ["Project Manager", "Technical Program Manager", "Portfolio Manager", "Business Analyst"],
-        "technical project manager": ["Project Manager", "Engineering Manager", "Scrum Master", "IT Project Manager"],
+        "project manager": ["Program Manager", "Technical Project Manager", "Scrum Master", "Delivery Manager"],
+        "program manager": ["Project Manager", "Technical Program Manager", "Portfolio Manager"],
+        "technical project manager": ["Project Manager", "Engineering Manager", "Scrum Master"],
         "product manager": ["Product Owner", "Technical Product Manager", "Program Manager"],
         "product owner": ["Product Manager", "Scrum Master", "Business Analyst"],
         "scrum master": ["Agile Coach", "Project Manager", "Delivery Manager"],

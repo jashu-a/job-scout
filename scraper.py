@@ -77,6 +77,63 @@ def _fetch_page_text(url: str, max_chars: int = 5000) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# JOB LINK VALIDATOR — check if a posting is still active before notifying
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_CLOSED_INDICATORS = [
+    "no longer accepting applications",
+    "this job is no longer available",
+    "this position has been filled",
+    "this job has expired",
+    "job no longer exists",
+    "this listing has expired",
+    "this job posting has been removed",
+    "application deadline has passed",
+    "sorry, this position is no longer open",
+    "this role has been filled",
+    "job is closed",
+    "position closed",
+    "posting has been removed",
+    "this job is expired",
+    "no longer available",
+    "applications are closed",
+    "we are no longer hiring",
+    "this position has been closed",
+    "job not found",
+    "page not found",
+]
+
+
+def is_job_still_active(url: str) -> tuple[bool, str]:
+    """
+    Check if a job posting is still active by fetching the page.
+    Returns (is_active, reason).
+    """
+    if not url:
+        return True, ""
+
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=10, allow_redirects=True)
+
+        if resp.status_code in (404, 410):
+            return False, f"HTTP {resp.status_code}"
+
+        if resp.status_code != 200:
+            return True, ""
+
+        page_text = resp.text.lower()
+
+        for indicator in _CLOSED_INDICATORS:
+            if indicator in page_text:
+                return False, indicator
+
+        return True, ""
+
+    except requests.RequestException:
+        return True, ""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # LOCATION NORMALIZER
 # Handles: "Tokyo", "Japan", "NYC", "New York", "Tokyo, Japan", "US", etc.
 # ═══════════════════════════════════════════════════════════════════════════════
