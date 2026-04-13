@@ -18,6 +18,10 @@ search_combos:
     location: "Japan"
     seniority: "Mid level"
 
+  - title: "Backend Developer"
+    location: "Singapore"
+    seniority: "Mid level"
+
   - title: "Software Engineer"
     location: "Singapore"
     seniority: "Mid level"
