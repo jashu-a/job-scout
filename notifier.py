@@ -54,7 +54,10 @@ def send_job_message(
     )
 
     if link:
-        message += f"\n🔗 <a href=\"{link}\">Apply Here</a>\n"
+        message += f"\n🔗 <a href=\"{link}\">Apply Here</a>"
+        if "linkedin.com" in link.lower():
+            message += f"\n⚡ <i>LinkedIn — verify listing is still open</i>"
+        message += "\n"
 
     message += f"━━━━━━━━━━━━━━━━━━━"
 

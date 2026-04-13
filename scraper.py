@@ -103,6 +103,14 @@ _CLOSED_INDICATORS = [
     "page not found",
 ]
 
+# LinkedIn-specific: these appear in the HTML even without login
+_LINKEDIN_CLOSED_INDICATORS = [
+    "no longer accepting applications",
+    "this job is no longer available",
+    "job is closed",
+    "this job has expired",
+]
+
 
 def is_job_still_active(url: str) -> tuple[bool, str]:
     """
@@ -115,18 +123,52 @@ def is_job_still_active(url: str) -> tuple[bool, str]:
     try:
         resp = requests.get(url, headers=HEADERS, timeout=10, allow_redirects=True)
 
-        if resp.status_code in (404, 410):
+        # 4xx client errors = job gone
+        if resp.status_code in (404, 410, 403):
             return False, f"HTTP {resp.status_code}"
 
-        if resp.status_code != 200:
+        # 3xx without resolution or 5xx — assume active
+        if resp.status_code >= 500:
             return True, ""
+
+        # Check if we were redirected to a homepage or generic page (job removed, site redirects)
+        final_url = resp.url.lower()
+        original_domain = url.split("/")[2].lower() if len(url.split("/")) > 2 else ""
+        if original_domain and original_domain in final_url:
+            # Redirected to homepage = job was removed
+            path = final_url.split(original_domain)[-1].strip("/")
+            if not path or path in ("jobs", "careers", "search", "home", "index"):
+                return False, "Redirected to homepage (job removed)"
 
         page_text = resp.text.lower()
 
+        # Check page size — very small pages often mean "not found" splash screens
+        if len(page_text) < 500 and resp.status_code == 200:
+            # Tiny page, likely an error/redirect page
+            for word in ["not found", "removed", "expired", "unavailable", "error"]:
+                if word in page_text:
+                    return False, f"Minimal page with '{word}'"
+
+        # LinkedIn-specific
+        if "linkedin.com" in url.lower():
+            for indicator in _LINKEDIN_CLOSED_INDICATORS:
+                if indicator in page_text:
+                    return False, indicator
+            if "/login" in final_url or "/authwall" in final_url:
+                return True, ""
+
+        # General check for all sites
         for indicator in _CLOSED_INDICATORS:
             if indicator in page_text:
                 return False, indicator
 
+        return True, ""
+
+    except requests.exceptions.HTTPError as e:
+        # Catch 410, 404 etc that might raise exceptions
+        status = getattr(e.response, 'status_code', 0) if e.response else 0
+        if status in (404, 410):
+            return False, f"HTTP {status}"
         return True, ""
 
     except requests.RequestException:
