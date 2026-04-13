@@ -22,6 +22,7 @@ def send_job_message(
     key_matches: list[str],
     key_gaps: list[str],
     posted_at: str = "",
+    job_id: int = 0,
 ) -> bool:
     """Send a single job match as a formatted Telegram message."""
 
@@ -31,6 +32,12 @@ def send_job_message(
     message = (
         f"🎯 <b>Job Match Found!</b>\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
+    )
+
+    if job_id:
+        message += f"🆔 <b>Job #{job_id}</b>\n"
+
+    message += (
         f"📌 <b>{title}</b>\n"
         f"🏢 {company}\n"
         f"📍 {location}\n"
@@ -124,7 +131,7 @@ def send_error_message(
 
     if possible_cause:
         message += f"\n💡 <b>Possible cause:</b> {possible_cause}\n"
-    message += f"For more info, Check logs in latest Job Scout workflow in Github Actions"
+
     message += f"━━━━━━━━━━━━━━━━━━━"
 
     url = TELEGRAM_API.format(token=bot_token)

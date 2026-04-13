@@ -25,7 +25,8 @@ from pathlib import Path
 import yaml
 
 from db import (get_connection, make_hash, is_seen, is_duplicate, mark_seen, get_stats,
-                hash_resume, get_metadata, set_metadata, get_rescore_candidates, update_job_score)
+                hash_resume, get_metadata, set_metadata, get_rescore_candidates, update_job_score,
+                get_next_job_id)
 from scraper import scrape_jobs, is_job_still_active
 from matcher import match_resume_to_job, generate_tailored_resume, generate_cover_letter
 from doc_generator import create_tailored_resume, create_cover_letter
@@ -102,6 +103,28 @@ def _make_job_id(job: dict) -> str:
     return h[:8]
 
 
+def _docx_to_pdf(docx_path: str, pdf_path: str) -> bool:
+    """Convert a .docx file to .pdf using python-docx2pdf or LibreOffice."""
+    try:
+        import subprocess
+        # Use LibreOffice for reliable conversion (available on GitHub Actions ubuntu)
+        result = subprocess.run(
+            ["libreoffice", "--headless", "--convert-to", "pdf", "--outdir",
+             str(Path(pdf_path).parent), docx_path],
+            capture_output=True, timeout=60,
+        )
+        # LibreOffice outputs to same dir with .pdf extension
+        expected = Path(docx_path).with_suffix(".pdf")
+        if expected.exists():
+            if str(expected) != pdf_path:
+                expected.rename(pdf_path)
+            return True
+        return False
+    except Exception as e:
+        print(f"       ⚠️  PDF conversion failed: {e}")
+        return False
+
+
 def _process_new_job(
     job: dict, conn, resume_text: str, resume_path: str,
     openai_key: str, openai_model: str, threshold: int,
@@ -161,14 +184,16 @@ def _process_new_job(
         print(f"       ⏹️  Reached max Telegram sends ({stats['max_sends']})")
         return False
 
+    # Assign sequential job ID
+    job_id = get_next_job_id(conn)
+
     # Generate docs
-    job_id = _make_job_id(job)
-    resume_docx_path = None
-    cover_letter_docx_path = None
+    resume_pdf_path = None
+    cover_letter_pdf_path = None
     drive_link = None
 
     if generate_docs and not dry_run:
-        safe_company = _sanitize(job["company"])
+        safe_company = _sanitize(job["company"]) or "Unknown"
 
         print(f"       📝 Generating tailored resume...")
         resume_data = generate_tailored_resume(
@@ -180,16 +205,43 @@ def _process_new_job(
             model=openai_model,
         )
 
+        candidate_name = _sanitize(resume_data.get("candidate_name", "Candidate")) if not resume_data.get("_error") else "Candidate"
+
         if not resume_data.get("_error"):
-            resume_docx_path = str(Path(tmp_dir) / f"{safe_company}_{job_id}_resume.docx")
-            create_tailored_resume(
-                original_docx_path=resume_path,
-                resume_data=resume_data,
-                job_title=job["title"],
-                job_company=job["company"],
-                output_path=resume_docx_path,
-            )
+            # Create tailored DOCX first
+            resume_docx_path = str(Path(tmp_dir) / f"resume_{job_id}.docx")
+            is_pdf_resume = resume_path.lower().endswith(".pdf")
+
+            if is_pdf_resume:
+                # PDF resume: can't use as DOCX template, create fresh DOCX from AI output
+                # doc_generator will handle creating a new document from scratch
+                create_tailored_resume(
+                    original_docx_path=None,
+                    resume_data=resume_data,
+                    job_title=job["title"],
+                    job_company=job["company"],
+                    output_path=resume_docx_path,
+                )
+            else:
+                # DOCX resume: use as template for formatting
+                create_tailored_resume(
+                    original_docx_path=resume_path,
+                    resume_data=resume_data,
+                    job_title=job["title"],
+                    job_company=job["company"],
+                    output_path=resume_docx_path,
+                )
             print(f"       ✅ Resume created")
+
+            # Convert to PDF with proper naming: CandidateName_ID_CompanyName.pdf
+            resume_pdf_name = f"{candidate_name}_{job_id}_{safe_company}_Resume.pdf"
+            resume_pdf_path = str(Path(tmp_dir) / resume_pdf_name)
+            if _docx_to_pdf(resume_docx_path, resume_pdf_path):
+                print(f"       ✅ Converted to PDF: {resume_pdf_name}")
+            else:
+                # Fallback: upload DOCX if PDF conversion fails
+                print(f"       ⚠️  PDF conversion failed, using DOCX")
+                resume_pdf_path = resume_docx_path
 
             print(f"       📝 Generating cover letter...")
             cl_data = generate_cover_letter(
@@ -202,31 +254,40 @@ def _process_new_job(
             )
 
             if not cl_data.get("_error"):
-                cover_letter_docx_path = str(Path(tmp_dir) / f"{safe_company}_{job_id}_cover_letter.docx")
+                cover_docx_path = str(Path(tmp_dir) / f"cover_{job_id}.docx")
                 create_cover_letter(
                     cl_data,
                     candidate_name=resume_data.get("candidate_name", "Candidate"),
                     contact_info=resume_data.get("contact_info", ""),
                     job_title=job["title"],
                     job_company=job["company"],
-                    output_path=cover_letter_docx_path,
+                    output_path=cover_docx_path,
                 )
                 stats["docs_generated"] += 1
                 print(f"       ✅ Cover letter created")
+
+                # Convert cover letter to PDF
+                cover_pdf_name = f"{candidate_name}_{job_id}_{safe_company}_CoverLetter.pdf"
+                cover_letter_pdf_path = str(Path(tmp_dir) / cover_pdf_name)
+                if _docx_to_pdf(cover_docx_path, cover_letter_pdf_path):
+                    print(f"       ✅ Converted to PDF: {cover_pdf_name}")
+                else:
+                    print(f"       ⚠️  PDF conversion failed, using DOCX")
+                    cover_letter_pdf_path = cover_docx_path
             else:
                 print(f"       ⚠️  Cover letter generation failed: {cl_data['_error']}")
         else:
             print(f"       ⚠️  Resume generation failed: {resume_data['_error']}")
 
     # Upload to Drive
-    if gdrive_enabled and resume_docx_path and cover_letter_docx_path and not dry_run:
+    if gdrive_enabled and resume_pdf_path and cover_letter_pdf_path and not dry_run:
         print(f"       ☁️  Uploading to Google Drive...")
         drive_result = upload_to_drive(
             parent_folder_id=gdrive_folder_id,
             company=job["company"],
-            job_id=job_id,
-            resume_path=resume_docx_path,
-            cover_letter_path=cover_letter_docx_path,
+            job_id=str(job_id),
+            resume_path=resume_pdf_path,
+            cover_letter_path=cover_letter_pdf_path,
         )
 
         if not drive_result.get("error"):
@@ -238,7 +299,7 @@ def _process_new_job(
 
     # Send Telegram notification
     if dry_run:
-        print(f"       🏃 DRY RUN — would send to Telegram")
+        print(f"       🏃 DRY RUN — would send to Telegram (Job #{job_id})")
         stats["matched_sent"] += 1
         return True
 
@@ -258,10 +319,11 @@ def _process_new_job(
         key_matches=key_matches,
         key_gaps=key_gaps,
         posted_at=job.get("posted_at", ""),
+        job_id=job_id,
     )
     if success:
         stats["matched_sent"] += 1
-        print(f"       📨 Sent to Telegram!")
+        print(f"       📨 Sent to Telegram! (Job #{job_id})")
     else:
         print(f"       ❌ Failed to send to Telegram")
 
@@ -434,6 +496,7 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
                 print(f"       New score: {new_score}/100 (was {cand['match_score']:.0f}) {'✅ NOW MATCHES!' if is_match else '❌ Still below'}")
 
                 if is_match:
+                    rescore_job_id = get_next_job_id(conn)
                     stats["matched_sent"] += 1
                     rescore_sent += 1
 
@@ -445,8 +508,9 @@ def run_pipeline(cfg: dict, dry_run: bool = False, skip_drive: bool = False, ski
                         location=cand["location"], link=cand["link"],
                         score=new_score, reasoning=full_reasoning,
                         key_matches=key_matches, key_gaps=key_gaps,
+                        job_id=rescore_job_id,
                     )
-                    print(f"       📨 Sent to Telegram!")
+                    print(f"       📨 Sent to Telegram! (Job #{rescore_job_id})")
 
             print(f"\n   🔄 Rescore complete: {rescore_sent} newly matched jobs sent")
         else:

@@ -196,6 +196,19 @@ def hash_resume(resume_text: str) -> str:
     return hashlib.sha256(resume_text.strip().encode()).hexdigest()[:16]
 
 
+def get_next_job_id(conn: sqlite3.Connection) -> int:
+    """Get the next sequential job ID and increment the counter."""
+    _ensure_metadata_table(conn)
+    row = conn.execute("SELECT value FROM metadata WHERE key = 'next_job_id'").fetchone()
+    current_id = int(row[0]) if row else 1
+    conn.execute(
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('next_job_id', ?)",
+        (str(current_id + 1),),
+    )
+    conn.commit()
+    return current_id
+
+
 def get_rescore_candidates(conn: sqlite3.Connection, threshold: int, max_age_days: int = 30) -> list[dict]:
     """
     Get jobs that scored below threshold — candidates for rescoring

@@ -40,10 +40,24 @@ jobs:
           cache: 'pip'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
+          sudo apt-get update -qq && sudo apt-get install -y -qq libreoffice-writer > /dev/null 2>&1
+          echo "✅ LibreOffice installed for PDF conversion"
 
       - name: Decode resume
-        run: echo "$RESUME_BASE64" | base64 -d > resume.docx
+        run: |
+          echo "$RESUME_BASE64" | base64 -d > resume_raw
+          # Auto-detect format by file magic bytes
+          FILE_TYPE=$(file -b --mime-type resume_raw)
+          echo "Detected file type: $FILE_TYPE"
+          if echo "$FILE_TYPE" | grep -q "pdf"; then
+            mv resume_raw resume.pdf
+            echo "📄 Resume is PDF"
+          else
+            mv resume_raw resume.docx
+            echo "📄 Resume is DOCX"
+          fi
         env:
           RESUME_BASE64: ${{ secrets.RESUME_BASE64 }}
 
@@ -73,13 +87,13 @@ jobs:
               'openai_api_key': os.environ['OPENAI_API_KEY'],
               'telegram_bot_token': os.environ['TELEGRAM_BOT_TOKEN'],
               'telegram_chat_id': os.environ['TELEGRAM_CHAT_ID'],
-              'resume_path': 'resume.docx',
+              'resume_path': 'resume.pdf' if os.path.exists('resume.pdf') else 'resume.docx',
               'search_combos': user_cfg.get('search_combos', [
                   {'title': 'Software Engineer', 'location': 'Tokyo, Japan', 'seniority': 'Mid level'},
               ]),
               'sources': user_cfg.get('sources', ['linkedin', 'tokyodev', 'japandev', 'gaijinpot', 'indeed', 'google_jobs']),
               'days_back': user_cfg.get('days_back', 5),
-              'match_threshold': user_cfg.get('match_threshold', 65),
+              'match_threshold': user_cfg.get('match_threshold', 75),
               'max_results_per_combo': user_cfg.get('max_results_per_combo', 50),
               'max_telegram_sends': user_cfg.get('max_telegram_sends', 50),
               'openai_model': user_cfg.get('openai_model', 'gpt-4o-mini'),
